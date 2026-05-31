@@ -6,8 +6,14 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+from dotenv import load_dotenv
 from pydantic import BaseModel, Field, PostgresDsn
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Push .env into os.environ so consumers that read raw env vars (e.g. the
+# local vault backend looking up CHRONOSYNC_VAULT_KEY) see the same values
+# pydantic-settings does. Idempotent and a no-op if .env is absent.
+load_dotenv()
 
 
 class DatabaseSettings(BaseModel):
