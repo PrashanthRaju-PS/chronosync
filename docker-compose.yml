@@ -1,0 +1,59 @@
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg15
+    container_name: chronosync-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: chrono
+      POSTGRES_PASSWORD: chrono
+      POSTGRES_DB: chronosync
+    ports:
+      - "5432:5432"
+    volumes:
+      - chronosync_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chrono -d chronosync"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    profiles: ["deploy"]
+    build: .
+    container_name: chronosync-migrate
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    env_file: .env
+    command: ["uv", "run", "alembic", "upgrade", "head"]
+    restart: "no"
+
+  daemon:
+    profiles: ["deploy"]
+    build: .
+    container_name: chronosync-daemon
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    env_file: .env
+    volumes:
+      - chronosync_vault:/var/lib/chronosync
+    command: ["uv", "run", "chronosync", "run"]
+    restart: unless-stopped
+
+  api:
+    profiles: ["deploy"]
+    build: .
+    container_name: chronosync-api
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    env_file: .env
+    ports:
+      - "8088:8088"
+    command: ["uv", "run", "uvicorn", "chronosync.api.app:app", "--host", "0.0.0.0", "--port", "8088"]
+    restart: unless-stopped
+
+volumes:
+  chronosync_pgdata:
+  chronosync_vault:
