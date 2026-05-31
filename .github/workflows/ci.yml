@@ -35,8 +35,8 @@ jobs:
         run: mypy chronosync
         continue-on-error: true  # informational until type debt cleared
 
-      - name: Unit tests
-        run: pytest -m unit -v
+      - name: Unit tests with coverage
+        run: pytest -m unit -v --cov=chronosync --cov-report=term-missing --cov-fail-under=60
 
   functional:
     name: Functional tests (TimescaleDB)
