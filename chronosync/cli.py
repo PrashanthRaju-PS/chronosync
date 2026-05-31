@@ -19,7 +19,7 @@ from chronosync.logging import configure_logging
 from chronosync.providers import registry as provider_registry
 from chronosync.secrets import build_backend
 from chronosync.seeders import BSEBhavcopySeeder, NSEBhavcopySeeder
-from chronosync.sync import planner, worker
+from chronosync.sync import meta_refresh, planner, worker
 
 app = typer.Typer(no_args_is_help=True, add_completion=False, help="ChronoSync CLI")
 admin_app = typer.Typer(no_args_is_help=True, help="Mutate users / accounts / credentials")
@@ -131,6 +131,41 @@ def cmd_backfill(
             f"fetched={summary.fetched} upserted={summary.upserted} errored={summary.errored} "
             f"duration_s={summary.duration_s}"
         )
+        await provider_registry.get_registry().close_all()
+        await db_engine.dispose()
+
+    _async(_run())
+
+
+@app.command("refresh-meta")
+def cmd_refresh_meta(
+    exchange: list[str] = typer.Option(None, "--exchange", "-e", help="Defaults to configured exchanges"),
+) -> None:
+    """Refresh instruments.market_cap from the configured provider's ticker meta."""
+    _bootstrap()
+    settings = get_settings()
+    targets = [e.upper() for e in (exchange or settings.sync.exchanges)]
+
+    async def _run() -> None:
+        await db_engine.ping()
+        provider_registry.bootstrap_registry(settings.providers)
+        feed = provider_registry.get_registry().get(settings.providers.default_feed)
+        for ex in targets:
+            async with db_engine.session_scope() as s:
+                instruments = await repos.list_active_instruments(s, exchange=ex)
+            if not instruments:
+                console.print(f"[yellow]no active instruments for {ex}[/]")
+                continue
+            console.print(f"[cyan]{ex}[/]: refreshing market_cap for {len(instruments)} instruments")
+            summary = await meta_refresh.run(
+                instruments,
+                feed=feed,
+                concurrency=settings.providers.yfinance_concurrency,
+            )
+            console.print(
+                f"[green]{ex} done[/]  scanned={summary.scanned} updated={summary.updated} "
+                f"empty={summary.empty} errored={summary.errored} duration_s={summary.duration_s}"
+            )
         await provider_registry.get_registry().close_all()
         await db_engine.dispose()
 

@@ -23,32 +23,73 @@ def event_loop() -> Iterator[asyncio.AbstractEventLoop]:
     loop.close()
 
 
+def _existing_dsn_reachable(dsn: str) -> bool:
+    """Best-effort sync ping. Returns True if we can open a TCP connection
+    AND select 1. Used by CI where a service container is already running."""
+    import asyncio
+
+    try:
+        import asyncpg
+    except ImportError:  # pragma: no cover
+        return False
+
+    async def _ping() -> bool:
+        try:
+            # asyncpg wants postgresql:// not postgresql+asyncpg://
+            url = dsn.replace("postgresql+asyncpg://", "postgresql://")
+            conn = await asyncio.wait_for(asyncpg.connect(url), timeout=3.0)
+            try:
+                await conn.fetchval("SELECT 1")
+            finally:
+                await conn.close()
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
+    return asyncio.run(_ping())
+
+
+def _apply_migrations(dsn: str) -> None:
+    env = os.environ.copy()
+    env["CHRONOSYNC_DB__DSN"] = dsn
+    subprocess.check_call(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=Path(__file__).resolve().parents[1],
+        env=env,
+    )
+
+
 @pytest.fixture(scope="session")
 def pg_container() -> Iterator[str]:
-    """TimescaleDB testcontainer. Yields the asyncpg DSN. Skipped if Docker absent."""
+    """Yield an asyncpg DSN pointed at a running TimescaleDB.
+
+    Strategy:
+    1. If CHRONOSYNC_DB__DSN is already reachable (CI service container,
+       local docker-compose), use it as-is and apply migrations idempotently.
+    2. Otherwise spin up testcontainers/timescaledb.
+    3. Otherwise skip — functional tests need a real DB.
+    """
+    configured = os.environ.get("CHRONOSYNC_DB__DSN", "")
+    if configured and _existing_dsn_reachable(configured):
+        _apply_migrations(configured)
+        yield configured
+        return
+
     try:
         from testcontainers.postgres import PostgresContainer
     except ImportError:  # pragma: no cover
-        pytest.skip("testcontainers not installed")
+        pytest.skip("testcontainers not installed and no reachable DB")
 
     image = "timescale/timescaledb:latest-pg15"
     try:
         container = PostgresContainer(image=image, dbname="chronosync_test", username="chrono", password="chrono")
         container.start()
     except Exception as e:  # noqa: BLE001
-        pytest.skip(f"docker unavailable: {e}")
+        pytest.skip(f"docker unavailable and no reachable DB: {e}")
     try:
         dsn = container.get_connection_url().replace("postgresql+psycopg2://", "postgresql+asyncpg://")
         os.environ["CHRONOSYNC_DB__DSN"] = dsn
-
-        # Run migrations via the active venv's Python (alembic isn't on PATH outside it).
-        env = os.environ.copy()
-        env["CHRONOSYNC_DB__DSN"] = dsn
-        subprocess.check_call(
-            [sys.executable, "-m", "alembic", "upgrade", "head"],
-            cwd=Path(__file__).resolve().parents[1],
-            env=env,
-        )
+        _apply_migrations(dsn)
         yield dsn
     finally:
         container.stop()

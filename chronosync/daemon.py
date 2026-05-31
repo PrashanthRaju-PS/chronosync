@@ -14,7 +14,7 @@ from chronosync.db import engine as db_engine
 from chronosync.logging import configure_logging, get_logger
 from chronosync.providers import registry as provider_registry
 from chronosync.seeders import BSEBhavcopySeeder, NSEBhavcopySeeder
-from chronosync.sync import planner, worker
+from chronosync.sync import meta_refresh, planner, worker
 
 _log = get_logger(__name__)
 
@@ -43,11 +43,18 @@ class Daemon:
             id="seed_iteration",
             replace_existing=True,
         )
+        self._scheduler.add_job(
+            self.run_meta_iteration,
+            CronTrigger.from_crontab(self._settings.sync.meta_cron),
+            id="meta_iteration",
+            replace_existing=True,
+        )
         self._scheduler.start()
         _log.info(
             "daemon_started",
             eod_cron=self._settings.sync.eod_cron,
             seed_cron=self._settings.sync.seed_cron,
+            meta_cron=self._settings.sync.meta_cron,
             tz=self._settings.sync.timezone,
             exchanges=self._settings.sync.exchanges,
         )
@@ -92,6 +99,30 @@ class Daemon:
                 scanned=summary.scanned,
                 fetched=summary.fetched,
                 upserted=summary.upserted,
+                errored=summary.errored,
+                duration_s=summary.duration_s,
+            )
+
+    async def run_meta_iteration(self) -> None:
+        feed_name = self._settings.providers.default_feed
+        feed = provider_registry.get_registry().get(feed_name)
+        from chronosync.db import repositories as repos
+
+        for exchange in self._settings.sync.exchanges:
+            async with db_engine.session_scope() as s:
+                instruments = await repos.list_active_instruments(s, exchange=exchange)
+            summary = await meta_refresh.run(
+                instruments,
+                feed=feed,
+                concurrency=self._settings.providers.yfinance_concurrency,
+            )
+            _log.info(
+                "meta_iteration_done",
+                exchange=exchange,
+                feed=feed_name,
+                scanned=summary.scanned,
+                updated=summary.updated,
+                empty=summary.empty,
                 errored=summary.errored,
                 duration_s=summary.duration_s,
             )

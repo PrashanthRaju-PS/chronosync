@@ -34,6 +34,7 @@ class SyncSettings(BaseModel):
     exchanges: list[str] = Field(default_factory=lambda: ["NSE", "BSE"])
     eod_cron: str = "30 18 * * 1-5"
     seed_cron: str = "0 9 * * 1-5"
+    meta_cron: str = "0 6 * * SAT"  # weekly market_cap refresh
     timezone: str = "Asia/Kolkata"
     backfill_batch_days: int = 30
 

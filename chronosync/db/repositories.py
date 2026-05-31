@@ -113,6 +113,26 @@ async def deactivate_missing(
     return res.rowcount or 0
 
 
+async def update_instrument_market_cap(
+    session: AsyncSession,
+    *,
+    instrument_id: UUID,
+    market_cap: Decimal | None,
+    as_of: date,
+) -> int:
+    """Refresh market_cap snapshot. No-op (returns 0) when value is None so
+    transient provider misses never clobber an existing good value."""
+    if market_cap is None:
+        return 0
+    stmt = (
+        update(Instrument)
+        .where(Instrument.id == instrument_id)
+        .values(market_cap=market_cap, market_cap_as_of=as_of, updated_at=func.now())
+    )
+    res = await session.execute(stmt)
+    return res.rowcount or 0
+
+
 # ---------- daily bars ----------
 
 
@@ -433,6 +453,7 @@ __all__ = [
     "max_synced_ts",
     "remove_account",
     "sync_status_for",
+    "update_instrument_market_cap",
     "upsert_credential",
     "upsert_daily_bars",
     "upsert_instruments",
