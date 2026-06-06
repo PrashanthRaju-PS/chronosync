@@ -271,6 +271,28 @@ async def mark_sync_success(
     await session.execute(stmt)
 
 
+async def mark_sync_finished(
+    session: AsyncSession,
+    *,
+    instrument_id: UUID,
+    feed_name: str,
+) -> None:
+    """Close a run that fetched no new bars: stamp last_run_finished_at and clear
+    last_error, without touching last_synced_ts. Without this, the empty-result
+    path leaves last_run_started_at ahead of last_run_finished_at forever, so the
+    row reads as perpetually 'in progress'. The row must already exist (started)."""
+    now = datetime.now(timezone.utc)
+    stmt = (
+        update(SyncState)
+        .where(
+            SyncState.instrument_id == instrument_id,
+            SyncState.feed_name == feed_name,
+        )
+        .values(last_run_finished_at=now, last_error=None)
+    )
+    await session.execute(stmt)
+
+
 async def mark_sync_error(
     session: AsyncSession,
     *,
@@ -315,6 +337,16 @@ async def sync_status_for(
 
 async def last_global_sync_at(session: AsyncSession) -> datetime | None:
     stmt = select(func.max(SyncState.last_run_finished_at))
+    res = await session.execute(stmt)
+    return res.scalar_one_or_none()
+
+
+async def last_synced_max(session: AsyncSession, *, feed_name: str | None = None) -> date | None:
+    """Newest bar date present across feeds — the data-freshness watermark
+    (distinct from last_global_sync_at, which is when a run last *finished*)."""
+    stmt = select(func.max(SyncState.last_synced_ts))
+    if feed_name:
+        stmt = stmt.where(SyncState.feed_name == feed_name)
     res = await session.execute(stmt)
     return res.scalar_one_or_none()
 

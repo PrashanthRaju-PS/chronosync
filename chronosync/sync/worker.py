@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from chronosync.db import engine as db_engine
 from chronosync.db import repositories as repos
@@ -24,6 +24,7 @@ class IterationSummary:
     upserted: int = 0
     errored: int = 0
     duration_s: float = 0.0
+    errored_tickers: list[str] = field(default_factory=list)
 
 
 async def run(
@@ -73,6 +74,7 @@ async def _handle_one(task: FetchTask, feed: BaseDataFeed, summary: IterationSum
             err=str(e),
         )
         summary.errored += 1
+        summary.errored_tickers.append(task.ticker)
         async with db_engine.session_scope() as s:
             await repos.mark_sync_error(
                 s,
@@ -89,6 +91,7 @@ async def _handle_one(task: FetchTask, feed: BaseDataFeed, summary: IterationSum
             err=str(e),
         )
         summary.errored += 1
+        summary.errored_tickers.append(task.ticker)
         async with db_engine.session_scope() as s:
             await repos.mark_sync_error(
                 s,
@@ -100,6 +103,12 @@ async def _handle_one(task: FetchTask, feed: BaseDataFeed, summary: IterationSum
 
     summary.fetched += len(rows)
     if not rows:
+        # No new bars (e.g. non-trading gap, or a ticker the feed has no data
+        # for). Close the run so the row doesn't read as perpetually in-progress.
+        async with db_engine.session_scope() as s:
+            await repos.mark_sync_finished(
+                s, instrument_id=task.instrument_id, feed_name=task.feed_name
+            )
         return
 
     async with db_engine.session_scope() as s:

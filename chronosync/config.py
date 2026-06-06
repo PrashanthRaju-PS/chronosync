@@ -38,11 +38,18 @@ class ProviderSettings(BaseModel):
 
 class SyncSettings(BaseModel):
     exchanges: list[str] = Field(default_factory=lambda: ["NSE", "BSE"])
-    eod_cron: str = "30 18 * * 1-5"
-    seed_cron: str = "0 9 * * 1-5"
+    # Day-of-week MUST be names, not 1-5: APScheduler's numeric DOW is 0=mon..6=sun,
+    # so CronTrigger.from_crontab("... 1-5") reads as Tue-Sat (skips Mon, runs Sat).
+    # Names parse unambiguously. See tests/unit/test_daemon_cron.py.
+    eod_cron: str = "30 18 * * mon-fri"
+    seed_cron: str = "0 9 * * mon-fri"
     meta_cron: str = "0 6 * * SAT"  # weekly market_cap refresh
     timezone: str = "Asia/Kolkata"
     backfill_batch_days: int = 30
+    # On daemon start, run one immediate sync if data is behind the most recent
+    # completed trading session (i.e. a scheduled run was missed while the
+    # process was down). See Daemon._catch_up_if_stale.
+    catch_up_on_start: bool = True
 
 
 class ApiSettings(BaseModel):

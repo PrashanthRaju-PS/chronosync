@@ -9,8 +9,10 @@ from datetime import date
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from chronosync import calendars
 from chronosync.config import Settings, get_settings
 from chronosync.db import engine as db_engine
+from chronosync.db import repositories as repos
 from chronosync.logging import configure_logging, get_logger
 from chronosync.providers import registry as provider_registry
 from chronosync.seeders import BSEBhavcopySeeder, NSEBhavcopySeeder
@@ -31,24 +33,42 @@ class Daemon:
         await db_engine.ping()
         provider_registry.bootstrap_registry(self._settings.providers)
 
+        # coalesce + a grace window so a job that misfires while the scheduler
+        # is *alive* (event loop blocked, prior run overran) still runs once
+        # rather than being silently dropped. This does NOT cover a process-down
+        # gap — that's what _catch_up_if_stale below handles.
         self._scheduler.add_job(
             self.run_sync_iteration,
             CronTrigger.from_crontab(self._settings.sync.eod_cron),
             id="sync_iteration",
             replace_existing=True,
+            coalesce=True,
+            misfire_grace_time=3600,
         )
         self._scheduler.add_job(
             self.run_seed_iteration,
             CronTrigger.from_crontab(self._settings.sync.seed_cron),
             id="seed_iteration",
             replace_existing=True,
+            coalesce=True,
+            misfire_grace_time=3600,
         )
         self._scheduler.add_job(
             self.run_meta_iteration,
             CronTrigger.from_crontab(self._settings.sync.meta_cron),
             id="meta_iteration",
             replace_existing=True,
+            coalesce=True,
+            misfire_grace_time=6 * 3600,
         )
+        # Self-heal a sync missed while the daemon was down: a no-trigger job
+        # runs once, immediately, after the scheduler starts.
+        if self._settings.sync.catch_up_on_start:
+            self._scheduler.add_job(
+                self._catch_up_if_stale,
+                id="catch_up_on_start",
+                replace_existing=True,
+            )
         self._scheduler.start()
         _log.info(
             "daemon_started",
@@ -81,12 +101,56 @@ class Daemon:
 
     # ----- jobs -----
 
+    async def _catch_up_if_stale(self) -> None:
+        """Run one immediate sync if a scheduled run was missed while the daemon
+        was down.
+
+        The in-memory scheduler keeps no state across restarts, so a misfire
+        can't fire for a process that wasn't running — on restart it only
+        schedules the next future run. Instead of relying on the schedule, we
+        reconcile against the data watermark: if the newest synced bar is older
+        than the most recent *completed* trading session, fire a sync now and
+        let cron resume. The sync path is incremental and idempotent, so this is
+        a cheap no-op when already current.
+
+        Skipped on a cold DB (no prior sync) so we don't trigger a full-lookback
+        backfill on first boot — seeding and the normal cron handle first fill.
+        """
+        async with db_engine.session_scope() as s:
+            last = await repos.last_synced_max(s, feed_name=self._settings.providers.default_feed)
+        if last is None:
+            _log.info("catch_up_skipped", reason="cold_db")
+            return
+
+        today = date.today()
+        # Most recent fully-closed session across exchanges. Using the day strictly
+        # before today avoids racing today's own EOD run (data may not exist yet).
+        expected = max(
+            calendars.prev_trading_day(ex, today) for ex in self._settings.sync.exchanges
+        )
+        if last >= expected:
+            _log.info("catch_up_skipped", reason="current",
+                      last_synced=last.isoformat(), expected=expected.isoformat())
+            return
+
+        _log.info("catch_up_triggered",
+                  last_synced=last.isoformat(), expected=expected.isoformat())
+        await self.run_sync_iteration()
+
     async def run_sync_iteration(self) -> None:
         feed_name = self._settings.providers.default_feed
         feed = provider_registry.get_registry().get(feed_name)
         for exchange in self._settings.sync.exchanges:
             async with db_engine.session_scope() as s:
                 tasks = await planner.build_tasks(s, exchange=exchange, feed_name=feed_name)
+            # Start line: pairs with sync_iteration_done so the log shows a run
+            # is in flight (and its size) rather than only that one finished.
+            _log.info(
+                "sync_iteration_start",
+                exchange=exchange,
+                feed=feed_name,
+                pending=len(tasks),
+            )
             summary = await worker.run(
                 tasks,
                 feed=feed,
@@ -102,6 +166,18 @@ class Daemon:
                 errored=summary.errored,
                 duration_s=summary.duration_s,
             )
+            # End-of-run rollup naming the failed tickers, so you don't have to
+            # scrape individual WARN lines between two iteration markers. Capped
+            # to keep the line bounded on a bad day.
+            if summary.errored:
+                _log.warning(
+                    "sync_iteration_errors",
+                    exchange=exchange,
+                    feed=feed_name,
+                    errored=summary.errored,
+                    tickers=summary.errored_tickers[:50],
+                    truncated=max(0, summary.errored - 50),
+                )
 
     async def run_meta_iteration(self) -> None:
         feed_name = self._settings.providers.default_feed

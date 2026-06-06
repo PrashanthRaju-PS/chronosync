@@ -58,21 +58,44 @@ def test_daemon_registers_three_cron_jobs(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize(
-    "field, value",
-    [
-        ("eod_cron", "30 18 * * 1-5"),
-        ("seed_cron", "0 9 * * 1-5"),
-        ("meta_cron", "0 6 * * SAT"),
-    ],
-)
-def test_default_cron_strings_parse(field: str, value: str) -> None:
+def test_default_cron_strings_parse() -> None:
     """All shipped cron defaults must be valid for APScheduler — catches a
-    typo'd default before it surfaces at daemon startup."""
+    typo'd default before it surfaces at daemon startup. Pulls the actual
+    defaults from SyncSettings so the test can't drift from what ships."""
     from apscheduler.triggers.cron import CronTrigger
 
-    trigger = CronTrigger.from_crontab(value)
-    assert trigger is not None
+    s = SyncSettings()
+    for value in (s.eod_cron, s.seed_cron, s.meta_cron):
+        assert CronTrigger.from_crontab(value) is not None
+
+
+@pytest.mark.unit
+def test_eod_cron_fires_weekdays_not_saturday() -> None:
+    """Regression for the day-of-week off-by-one: APScheduler's numeric DOW is
+    0=mon..6=sun, so '30 18 * * 1-5' silently means Tue-Sat (skips Mon, runs
+    Sat). The shipped defaults must use names and fire Mon-Fri only."""
+    from datetime import datetime, timedelta
+
+    from apscheduler.triggers.cron import CronTrigger
+
+    try:
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo("Asia/Kolkata")
+    except Exception:  # pragma: no cover
+        import pytz
+
+        tz = pytz.timezone("Asia/Kolkata")
+
+    for expr in (SyncSettings().eod_cron, SyncSettings().seed_cron):
+        trigger = CronTrigger.from_crontab(expr, timezone=tz)
+        prev = datetime(2026, 6, 5, 0, 0, tzinfo=tz)  # a Friday
+        fired = set()
+        for _ in range(10):
+            nxt = trigger.get_next_fire_time(None, prev)
+            fired.add(nxt.weekday())  # Mon=0 .. Sun=6
+            prev = nxt + timedelta(minutes=1)
+        assert fired == {0, 1, 2, 3, 4}, f"{expr} fired on weekdays {sorted(fired)}"
 
 
 @pytest.mark.unit
