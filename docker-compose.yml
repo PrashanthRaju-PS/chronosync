@@ -1,3 +1,10 @@
+# Full-stack compose: DB + migrate + daemon + api all run in Docker.
+# All non-DB services read .env but override the DB DSN so they reach the DB
+# over the compose network (the .env DSN uses localhost, which is correct only
+# for bare-metal runs on the host).
+x-db-env: &db-env
+  CHRONOSYNC_DB__DSN: "postgresql+asyncpg://chrono:chrono@timescaledb:5432/chronosync"
+
 services:
   timescaledb:
     image: timescale/timescaledb:latest-pg15
@@ -18,39 +25,44 @@ services:
       retries: 10
 
   migrate:
-    profiles: ["deploy"]
     build: .
     container_name: chronosync-migrate
     depends_on:
       timescaledb:
         condition: service_healthy
     env_file: .env
+    environment:
+      <<: *db-env
     command: ["uv", "run", "alembic", "upgrade", "head"]
     restart: "no"
 
   daemon:
-    profiles: ["deploy"]
     build: .
     container_name: chronosync-daemon
     depends_on:
       migrate:
         condition: service_completed_successfully
     env_file: .env
+    environment:
+      <<: *db-env
     volumes:
       - chronosync_vault:/var/lib/chronosync
     command: ["uv", "run", "chronosync", "run"]
     restart: unless-stopped
 
   api:
-    profiles: ["deploy"]
     build: .
     container_name: chronosync-api
     depends_on:
       migrate:
         condition: service_completed_successfully
     env_file: .env
+    environment:
+      <<: *db-env
+    # Bound to loopback on the host (the scanner connects to 127.0.0.1:8088);
+    # 0.0.0.0 inside the container so uvicorn accepts the forwarded connection.
     ports:
-      - "8088:8088"
+      - "127.0.0.1:8088:8088"
     command: ["uv", "run", "uvicorn", "chronosync.api.app:app", "--host", "0.0.0.0", "--port", "8088"]
     restart: unless-stopped
 

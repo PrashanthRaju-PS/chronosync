@@ -25,3 +25,18 @@ foreach ($name in 'daemon','api') {
     }
     Remove-Item $pidFile -ErrorAction SilentlyContinue
 }
+
+# The recorded PID is the venv python.exe *shim*, which frequently exits right
+# after spawning the real interpreter — leaving that child (still bound to 8088)
+# re-parented and unreachable via the pidfile PID above. Sweep it up by matching
+# the actual chronosync/uvicorn command lines so no orphan survives to block the
+# next start. Scoped to our own processes only.
+$orphans = Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" |
+    Where-Object { $_.CommandLine -match 'chronosync|uvicorn' }
+foreach ($o in $orphans) {
+    & taskkill /T /F /PID $o.ProcessId 2>$null | Out-Null
+    Write-Output ("reaped orphan PID {0}" -f $o.ProcessId)
+}
+if (-not $orphans) {
+    Write-Output "no orphaned chronosync processes"
+}

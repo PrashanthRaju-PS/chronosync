@@ -13,6 +13,7 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
 
 WORKDIR /app
 COPY pyproject.toml ./
+COPY README.md ./
 COPY chronosync ./chronosync
 COPY chronosync_client ./chronosync_client
 COPY alembic.ini ./
