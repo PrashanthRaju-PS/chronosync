@@ -106,3 +106,68 @@ def test_bad_cron_string_raises_at_parse_time() -> None:
 
     with pytest.raises(ValueError):
         CronTrigger.from_crontab("not a cron")
+
+
+# --------------------------------------------------------------------------- #
+# Catch-up "expected session" — a daemon that boots after the EOD time on a    #
+# trading day must still recognise (and heal) the same-day gap.                #
+# --------------------------------------------------------------------------- #
+from datetime import date, datetime, time  # noqa: E402
+from zoneinfo import ZoneInfo  # noqa: E402
+
+from chronosync import calendars  # noqa: E402
+from chronosync.daemon import _cron_time_of_day  # noqa: E402
+
+_TZ = ZoneInfo("Asia/Kolkata")
+
+
+def _daemon(eod_cron: str = "30 18 * * mon-fri") -> Daemon:
+    s = _settings()
+    s.sync.eod_cron = eod_cron
+    s.sync.exchanges = ["NSE"]
+    return Daemon(s)
+
+
+@pytest.mark.unit
+class TestCronTimeOfDay:
+    def test_parses_minute_hour(self):
+        assert _cron_time_of_day("30 18 * * mon-fri") == time(18, 30)
+        assert _cron_time_of_day("0 6 * * SAT") == time(6, 0)
+
+    def test_unparseable_returns_none(self):
+        assert _cron_time_of_day("*/30 * * * *") is None
+        assert _cron_time_of_day("* 18 * * *") is None
+        assert _cron_time_of_day("") is None
+
+
+@pytest.mark.unit
+class TestExpectedLatestSession:
+    # 2026-07-13 is a Monday; 2026-07-11 a Saturday. Guarded against holidays.
+    MON = date(2026, 7, 13)
+    SAT = date(2026, 7, 11)
+
+    def test_after_eod_on_trading_day_expects_today(self):
+        if not calendars.is_trading_day("NSE", self.MON):
+            pytest.skip("2026-07-13 is not an NSE trading day")
+        now = datetime(2026, 7, 13, 20, 57, tzinfo=_TZ)   # the real bug scenario
+        assert _daemon()._expected_latest_session(now) == self.MON
+
+    def test_before_eod_on_trading_day_expects_prior_session(self):
+        if not calendars.is_trading_day("NSE", self.MON):
+            pytest.skip("2026-07-13 is not an NSE trading day")
+        now = datetime(2026, 7, 13, 9, 0, tzinfo=_TZ)
+        assert _daemon()._expected_latest_session(now) == calendars.prev_trading_day("NSE", self.MON)
+
+    def test_weekend_resolves_to_prior_session(self):
+        now = datetime(2026, 7, 11, 20, 0, tzinfo=_TZ)     # Saturday evening
+        expected = self.SAT if calendars.is_trading_day("NSE", self.SAT) \
+            else calendars.prev_trading_day("NSE", self.SAT)
+        assert _daemon()._expected_latest_session(now) == expected
+
+    def test_unparseable_cron_falls_back_to_strictly_before(self):
+        if not calendars.is_trading_day("NSE", self.MON):
+            pytest.skip("2026-07-13 is not an NSE trading day")
+        # Even after EOD time, an unparseable cron -> conservative prior-session.
+        now = datetime(2026, 7, 13, 20, 57, tzinfo=_TZ)
+        got = _daemon(eod_cron="*/30 * * * *")._expected_latest_session(now)
+        assert got == calendars.prev_trading_day("NSE", self.MON)

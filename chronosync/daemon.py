@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import signal
-from datetime import date
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -19,6 +20,19 @@ from chronosync.seeders import BSEBhavcopySeeder, NSEBhavcopySeeder
 from chronosync.sync import meta_refresh, planner, worker
 
 _log = get_logger(__name__)
+
+
+def _cron_time_of_day(cron: str) -> time | None:
+    """Best-effort ``time`` from the minute+hour of a simple ``"<min> <hour> …"``
+    cron expression. Returns None when those fields aren't plain integers (e.g.
+    ``*`` or ``*/30``), so callers can fall back to conservative behaviour."""
+    parts = cron.split()
+    if len(parts) < 2:
+        return None
+    try:
+        return time(hour=int(parts[1]), minute=int(parts[0]))
+    except ValueError:
+        return None
 
 
 class Daemon:
@@ -101,6 +115,37 @@ class Daemon:
 
     # ----- jobs -----
 
+    def _expected_latest_session(self, now: datetime | None = None) -> date:
+        """The most recent trading session that should already be synced.
+
+        Baseline is the day strictly before today — today's own bar is the EOD
+        cron's job and may not exist yet, so we don't want to chase it early.
+        BUT once today's EOD sync time has passed on a trading day, today's
+        session is genuinely expected: a daemon that boots *after* the EOD time
+        (e.g. it was down at 18:30 and started at 21:00) must still recognise the
+        same-day gap and self-heal, rather than waiting for tomorrow's cron.
+
+        The EOD time comes from the configured ``eod_cron`` (evaluated in the
+        configured timezone); if it can't be parsed we fall back to the
+        strictly-before-today baseline. `now` is injectable for tests.
+        """
+        exchanges = self._settings.sync.exchanges
+        tz = ZoneInfo(self._settings.sync.timezone)
+        now = (now or datetime.now(tz)).astimezone(tz)
+        eod = _cron_time_of_day(self._settings.sync.eod_cron)
+
+        # Reference day: today once its EOD time has passed, else yesterday. The
+        # trading calendar then maps that onto the latest actual session <= ref
+        # (so a Saturday/holiday reference resolves back to the prior session).
+        if eod is not None and now.time() >= eod:
+            ref = now.date()
+        else:
+            ref = now.date() - timedelta(days=1)
+        return max(
+            ref if calendars.is_trading_day(ex, ref) else calendars.prev_trading_day(ex, ref)
+            for ex in exchanges
+        )
+
     async def _catch_up_if_stale(self) -> None:
         """Run one immediate sync if a scheduled run was missed while the daemon
         was down.
@@ -109,9 +154,9 @@ class Daemon:
         can't fire for a process that wasn't running — on restart it only
         schedules the next future run. Instead of relying on the schedule, we
         reconcile against the data watermark: if the newest synced bar is older
-        than the most recent *completed* trading session, fire a sync now and
-        let cron resume. The sync path is incremental and idempotent, so this is
-        a cheap no-op when already current.
+        than the most recent expected session (see `_expected_latest_session`),
+        fire a sync now and let cron resume. The sync path is incremental and
+        idempotent, so this is a cheap no-op when already current.
 
         Skipped on a cold DB (no prior sync) so we don't trigger a full-lookback
         backfill on first boot — seeding and the normal cron handle first fill.
@@ -122,12 +167,7 @@ class Daemon:
             _log.info("catch_up_skipped", reason="cold_db")
             return
 
-        today = date.today()
-        # Most recent fully-closed session across exchanges. Using the day strictly
-        # before today avoids racing today's own EOD run (data may not exist yet).
-        expected = max(
-            calendars.prev_trading_day(ex, today) for ex in self._settings.sync.exchanges
-        )
+        expected = self._expected_latest_session()
         if last >= expected:
             _log.info("catch_up_skipped", reason="current",
                       last_synced=last.isoformat(), expected=expected.isoformat())
