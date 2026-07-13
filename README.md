@@ -9,36 +9,32 @@ See:
 
 ---
 
-## Quickstart (Windows dev)
+## Quickstart (Docker — recommended)
 
-```powershell
-# 1. Install uv (one time)
-#    https://docs.astral.sh/uv/getting-started/installation/
+Runs the whole stack — TimescaleDB, migrations, the sync daemon, and the read
+API — in containers. They carry `restart: unless-stopped`, so they auto-start on
+boot (Docker Desktop) and stop gracefully on shutdown (SIGTERM → the daemon
+stops its scheduler and closes DB connections cleanly).
 
-# 2. Install deps
-uv sync --extra dev
+```bash
+cp .env.example .env            # then set CHRONOSYNC_VAULT_KEY to a strong passphrase
+docker compose up -d --build
+```
 
-# 3. Bring up TimescaleDB
-docker compose up -d timescaledb
+This brings up `chronosync-db`, runs `chronosync-migrate` once (`alembic upgrade
+head`), then starts `chronosync-daemon` and `chronosync-api`. The read API is
+published on `127.0.0.1:8088`.
 
-# 4. Configure
-copy .env.example .env
-#  - set CHRONOSYNC_VAULT_KEY to a strong passphrase
+```bash
+docker compose ps                 # status
+docker compose logs -f daemon     # follow the sync daemon
+docker compose down               # stop the whole stack
+```
 
-# 5. Run migrations
-uv run alembic upgrade head
-
-# 6. Seed the instrument universe (NSE Bhavcopy)
-uv run chronosync seed --exchange NSE
-
-# 7. Backfill a year for one ticker
-uv run chronosync backfill --from 2025-06-01 --to 2026-05-31 --ticker RELIANCE
-
-# 8. Start the daemon (long-running)
-uv run chronosync run
-
-# 9. (Separate shell) Start the read API
-uv run uvicorn chronosync.api.app:app --host 127.0.0.1 --port 8088
+One-off seed / backfill run inside the daemon container:
+```bash
+docker compose exec daemon uv run chronosync seed --exchange NSE
+docker compose exec daemon uv run chronosync backfill --from 2025-06-01 --to 2026-05-31 --ticker RELIANCE
 ```
 
 Query:
@@ -47,15 +43,29 @@ curl "http://127.0.0.1:8088/instruments/RELIANCE"
 curl "http://127.0.0.1:8088/bars/daily?instrument=RELIANCE&from=2026-01-01&to=2026-05-31"
 ```
 
-## Quickstart (Linux/Docker deploy)
+> The app containers override the DB DSN to the compose network
+> (`timescaledb:5432`); the `localhost` DSN in `.env` is for the bare-metal dev
+> mode below.
 
-```bash
-cp .env.example .env
-# edit .env — set CHRONOSYNC_VAULT_KEY
-docker compose --profile deploy up -d
+## Dev (bare-metal app, Dockerized DB)
+
+Run the app processes directly on the host for faster iteration, with only the
+DB in Docker.
+
+```powershell
+# Install uv once: https://docs.astral.sh/uv/getting-started/installation/
+uv sync --extra dev
+docker compose up -d timescaledb        # DB only
+copy .env.example .env                  # set CHRONOSYNC_VAULT_KEY
+uv run alembic upgrade head
+uv run chronosync seed --exchange NSE
+uv run chronosync run                   # daemon (long-running)
+# separate shell:
+uv run uvicorn chronosync.api.app:app --host 127.0.0.1 --port 8088
 ```
 
-Brings up TimescaleDB, runs migrations once, starts the daemon and the read API.
+The helper scripts `start-chronosync.ps1` / `stop-chronosync.ps1` launch and
+reap both processes (stop sweeps up orphaned child processes too).
 
 ## Admin (users / accounts / credentials)
 
