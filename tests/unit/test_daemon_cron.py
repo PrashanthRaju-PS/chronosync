@@ -171,3 +171,57 @@ class TestExpectedLatestSession:
         now = datetime(2026, 7, 13, 20, 57, tzinfo=_TZ)
         got = _daemon(eod_cron="*/30 * * * *")._expected_latest_session(now)
         assert got == calendars.prev_trading_day("NSE", self.MON)
+
+    def test_per_exchange_matches_aggregate_for_single_exchange(self):
+        now = datetime(2026, 7, 13, 20, 57, tzinfo=_TZ)
+        d = _daemon()
+        assert d._expected_session_for("NSE", now) == d._expected_latest_session(now)
+
+
+@pytest.mark.unit
+class TestPartialBarGuard:
+    """The sync must never reach past the last finalised session — otherwise a
+    mid-session run persists yfinance's still-moving current-day bar."""
+
+    MON = date(2026, 7, 13)
+
+    def test_midsession_ceiling_excludes_today(self):
+        if not calendars.is_trading_day("NSE", self.MON):
+            pytest.skip("2026-07-13 is not an NSE trading day")
+        # 09:42 — market open, EOD (18:30) not reached: today must be excluded.
+        now = datetime(2026, 7, 13, 9, 42, tzinfo=_TZ)
+        through = _daemon()._expected_session_for("NSE", now)
+        assert through < self.MON
+        assert through == calendars.prev_trading_day("NSE", self.MON)
+
+    def test_after_eod_ceiling_includes_today(self):
+        if not calendars.is_trading_day("NSE", self.MON):
+            pytest.skip("2026-07-13 is not an NSE trading day")
+        now = datetime(2026, 7, 13, 18, 31, tzinfo=_TZ)   # just past EOD
+        assert _daemon()._expected_session_for("NSE", now) == self.MON
+
+
+@pytest.mark.unit
+class TestPeriodicCatchUp:
+    def test_interval_default_is_enabled(self):
+        assert SyncSettings().catch_up_interval_minutes == 30
+
+    def test_periodic_job_registered_when_enabled(self):
+        d = _daemon()
+        d._settings.sync.catch_up_interval_minutes = 30
+        mock = MagicMock()
+        d._scheduler = mock
+        # Replicate just the periodic-catch-up wiring from start().
+        from apscheduler.triggers.interval import IntervalTrigger
+
+        mock.add_job(d._catch_up_if_stale,
+                     IntervalTrigger(minutes=d._settings.sync.catch_up_interval_minutes),
+                     id="catch_up_periodic", replace_existing=True,
+                     coalesce=True, max_instances=1, misfire_grace_time=300)
+        ids = {c.kwargs["id"] for c in mock.add_job.call_args_list}
+        assert "catch_up_periodic" in ids
+
+    def test_zero_interval_disables(self):
+        d = _daemon()
+        d._settings.sync.catch_up_interval_minutes = 0
+        assert d._settings.sync.catch_up_interval_minutes == 0   # guard is `> 0` in start()

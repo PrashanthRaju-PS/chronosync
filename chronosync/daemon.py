@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 from chronosync import calendars
 from chronosync.config import Settings, get_settings
@@ -83,6 +84,21 @@ class Daemon:
                 id="catch_up_on_start",
                 replace_existing=True,
             )
+        # ...and keep re-checking. A cron fire that elapses while the process or
+        # the host VM is suspended is never replayed, so start-up alone isn't
+        # enough on a machine that sleeps through the EOD window: without this the
+        # gap survives until the next restart. max_instances=1 so a long sync
+        # can't stack up re-entrant catch-ups behind it.
+        if self._settings.sync.catch_up_interval_minutes > 0:
+            self._scheduler.add_job(
+                self._catch_up_if_stale,
+                IntervalTrigger(minutes=self._settings.sync.catch_up_interval_minutes),
+                id="catch_up_periodic",
+                replace_existing=True,
+                coalesce=True,
+                max_instances=1,
+                misfire_grace_time=300,
+            )
         self._scheduler.start()
         _log.info(
             "daemon_started",
@@ -115,21 +131,24 @@ class Daemon:
 
     # ----- jobs -----
 
-    def _expected_latest_session(self, now: datetime | None = None) -> date:
-        """The most recent trading session that should already be synced.
+    def _expected_session_for(self, exchange: str, now: datetime | None = None) -> date:
+        """The most recent *finalised* trading session for one exchange.
 
         Baseline is the day strictly before today — today's own bar is the EOD
-        cron's job and may not exist yet, so we don't want to chase it early.
-        BUT once today's EOD sync time has passed on a trading day, today's
-        session is genuinely expected: a daemon that boots *after* the EOD time
-        (e.g. it was down at 18:30 and started at 21:00) must still recognise the
-        same-day gap and self-heal, rather than waiting for tomorrow's cron.
+        cron's job and, mid-session, does not exist yet in final form. BUT once
+        today's EOD sync time has passed on a trading day, today's session is
+        complete and genuinely expected: a daemon that boots *after* the EOD time
+        (e.g. down at 18:30, started at 21:00) must still recognise the same-day
+        gap and self-heal rather than waiting for tomorrow's cron.
+
+        Doubles as the fetch ceiling for a sync (see `run_sync_iteration`): never
+        reaching past this date is what stops a mid-session run from persisting a
+        half-formed bar for the current day.
 
         The EOD time comes from the configured ``eod_cron`` (evaluated in the
         configured timezone); if it can't be parsed we fall back to the
         strictly-before-today baseline. `now` is injectable for tests.
         """
-        exchanges = self._settings.sync.exchanges
         tz = ZoneInfo(self._settings.sync.timezone)
         now = (now or datetime.now(tz)).astimezone(tz)
         eod = _cron_time_of_day(self._settings.sync.eod_cron)
@@ -141,9 +160,15 @@ class Daemon:
             ref = now.date()
         else:
             ref = now.date() - timedelta(days=1)
+        if calendars.is_trading_day(exchange, ref):
+            return ref
+        return calendars.prev_trading_day(exchange, ref)
+
+    def _expected_latest_session(self, now: datetime | None = None) -> date:
+        """`_expected_session_for` across every configured exchange (the most
+        recent session any of them should have) — the staleness bar for catch-up."""
         return max(
-            ref if calendars.is_trading_day(ex, ref) else calendars.prev_trading_day(ex, ref)
-            for ex in exchanges
+            self._expected_session_for(ex, now) for ex in self._settings.sync.exchanges
         )
 
     async def _catch_up_if_stale(self) -> None:
@@ -181,8 +206,17 @@ class Daemon:
         feed_name = self._settings.providers.default_feed
         feed = provider_registry.get_registry().get(feed_name)
         for exchange in self._settings.sync.exchanges:
+            # Never fetch past the last *finalised* session. yfinance serves the
+            # current day as a live, still-moving bar, so a run during market
+            # hours (catch-up, or a manual one-off) would otherwise persist a
+            # half-formed bar — a wrong close/high/low and a fraction of the
+            # day's volume — which then feeds the scanners as if it were real.
+            # Today is only included once its EOD time has passed.
+            through = self._expected_session_for(exchange)
             async with db_engine.session_scope() as s:
-                tasks = await planner.build_tasks(s, exchange=exchange, feed_name=feed_name)
+                tasks = await planner.build_tasks(
+                    s, exchange=exchange, feed_name=feed_name, today=through
+                )
             # Start line: pairs with sync_iteration_done so the log shows a run
             # is in flight (and its size) rather than only that one finished.
             _log.info(
@@ -190,6 +224,7 @@ class Daemon:
                 exchange=exchange,
                 feed=feed_name,
                 pending=len(tasks),
+                through=through.isoformat(),
             )
             summary = await worker.run(
                 tasks,

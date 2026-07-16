@@ -50,6 +50,13 @@ class SyncSettings(BaseModel):
     # completed trading session (i.e. a scheduled run was missed while the
     # process was down). See Daemon._catch_up_if_stale.
     catch_up_on_start: bool = True
+    # Also re-check on this interval (minutes; 0 disables). A cron fire that
+    # elapses while the process — or the whole VM — is suspended is never
+    # replayed by APScheduler, so on a laptop that sleeps through 18:30 the only
+    # other healing chance is a restart. This periodic re-check heals shortly
+    # after the machine wakes instead of waiting for the next EOD. It's a single
+    # cheap query when already current.
+    catch_up_interval_minutes: int = 30
 
 
 class ApiSettings(BaseModel):
