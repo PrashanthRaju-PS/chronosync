@@ -151,6 +151,14 @@ def _df_to_bars(df: Any) -> list[BarRow]:
     rows: list[BarRow] = []
     for ts, r in df.iterrows():
         try:
+            # Drop price-less rows. yfinance intermittently emits a row carrying a
+            # volume but NaN OHLC (a provider glitch, or a session it hasn't
+            # settled yet). Decimal(str(nan)) yields Decimal("NaN") instead of
+            # raising, so the except below never sees it and the NaN would persist
+            # — poisoning every consumer (the read API 500s on a non-finite close,
+            # and indicators silently go NaN). Volume alone is not a bar.
+            if any(_is_nan(r.get(k)) for k in ("Open", "High", "Low", "Close")):
+                continue
             o = Decimal(str(r["Open"]))
             h = Decimal(str(r["High"]))
             low = Decimal(str(r["Low"]))

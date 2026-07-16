@@ -44,6 +44,47 @@ async def test_fetch_daily_bars_maps_rows(monkeypatch: pytest.MonkeyPatch) -> No
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_nan_price_rows_are_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A row with volume but NaN OHLC must never become a bar.
+
+    Regression: yfinance intermittently serves a session as volume-only with NaN
+    prices. Decimal(str(nan)) returns Decimal("NaN") rather than raising, so the
+    NaN sailed through and was persisted — the read API then 500s on a non-finite
+    close and indicators silently go NaN.
+    """
+    nan = float("nan")
+    df = _df(
+        [
+            {"date": "2024-01-02", "Open": 100, "High": 105, "Low": 99, "Close": 104, "Adj Close": 104, "Volume": 1_000},
+            {"date": "2024-01-03", "Open": nan, "High": nan, "Low": nan, "Close": nan, "Adj Close": nan, "Volume": 41_455},
+        ]
+    )
+    monkeypatch.setattr(yfinance_feed, "_yf_download_sync", lambda *a, **k: df)
+
+    feed = yfinance_feed.YFinanceFeed(concurrency=1)
+    bars = [b async for b in feed.fetch_daily_bars("FOO", "NSE", date(2024, 1, 2), date(2024, 1, 3))]
+    assert len(bars) == 1                      # the NaN row is gone
+    assert bars[0].ts == date(2024, 1, 2)
+    assert all(b.close.is_finite() for b in bars)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_partial_nan_row_is_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Even one NaN among OHLC invalidates the bar (no half-formed rows)."""
+    df = _df(
+        [
+            {"date": "2024-01-02", "Open": 100, "High": 105, "Low": 99, "Close": float("nan"), "Adj Close": 104, "Volume": 1_000},
+        ]
+    )
+    monkeypatch.setattr(yfinance_feed, "_yf_download_sync", lambda *a, **k: df)
+    feed = yfinance_feed.YFinanceFeed(concurrency=1)
+    bars = [b async for b in feed.fetch_daily_bars("FOO", "NSE", date(2024, 1, 2), date(2024, 1, 2))]
+    assert bars == []
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_empty_df_yields_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(yfinance_feed, "_yf_download_sync", lambda *a, **k: pd.DataFrame())
     feed = yfinance_feed.YFinanceFeed(concurrency=1)
