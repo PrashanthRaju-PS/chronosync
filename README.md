@@ -113,3 +113,7 @@ See [docs/LLD.md §1](docs/LLD.md) for the full tree. Key entry points:
 - CLI: [chronosync/cli.py](chronosync/cli.py)
 - Read API: [chronosync/api/app.py](chronosync/api/app.py)
 - Client SDK: [chronosync_client/client.py](chronosync_client/client.py)
+
+## License
+
+Released under the [MIT License](LICENSE).
