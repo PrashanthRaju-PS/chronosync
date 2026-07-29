@@ -15,11 +15,11 @@ class DatabaseError(ChronoSyncError):
     pass
 
 
-class DatabaseUnavailable(DatabaseError):
+class DatabaseUnavailableError(DatabaseError):
     pass
 
 
-class UpsertConflict(DatabaseError):
+class UpsertConflictError(DatabaseError):
     pass
 
 
@@ -47,11 +47,11 @@ class SecretsError(ChronoSyncError):
     pass
 
 
-class VaultUnlocked(SecretsError):
+class VaultUnlockedError(SecretsError):
     pass
 
 
-class SecretNotFound(SecretsError):
+class SecretNotFoundError(SecretsError):
     pass
 
 

@@ -38,7 +38,8 @@ async def test_duplicate_ticker_exchange_pair_rejected(db_session) -> None:
     with pytest.raises(IntegrityError):
         await db_session.execute(
             text(
-                "INSERT INTO instruments (ticker, exchange, asset_class, country_code, currency, is_active) "
+                "INSERT INTO instruments "
+                "(ticker, exchange, asset_class, country_code, currency, is_active) "
                 "VALUES (:t, :e, 'EQUITY', 'IN', 'INR', true)"
             ),
             {"t": "UNIQ_X", "e": "NSE"},

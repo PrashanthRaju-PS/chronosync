@@ -32,9 +32,13 @@ async def test_last_synced_ts_is_monotonic(db_session) -> None:
     await db_session.commit()
 
     # Simulate batches landing out of order: newest first, then an older one.
-    await repos.mark_sync_success(db_session, instrument_id=inst.id, feed_name="yfinance", last_ts=date(2026, 5, 29))
+    await repos.mark_sync_success(
+        db_session, instrument_id=inst.id, feed_name="yfinance", last_ts=date(2026, 5, 29)
+    )
     await db_session.commit()
-    await repos.mark_sync_success(db_session, instrument_id=inst.id, feed_name="yfinance", last_ts=date(2026, 3, 25))
+    await repos.mark_sync_success(
+        db_session, instrument_id=inst.id, feed_name="yfinance", last_ts=date(2026, 3, 25)
+    )
     await db_session.commit()
 
     status = await repos.sync_status_for(db_session, instrument_id=inst.id, feed_name="yfinance")

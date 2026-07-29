@@ -17,7 +17,7 @@ import base64
 import json
 import os
 import secrets as pysecrets
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -25,7 +25,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
-from chronosync.exceptions import SecretNotFound, VaultUnlocked
+from chronosync.exceptions import SecretNotFoundError, VaultUnlockedError
 
 _SALT_LEN = 16
 _PBKDF_ITERS = 200_000
@@ -54,7 +54,7 @@ class LocalEncryptedBackend:
     def _passphrase(self) -> str:
         val = os.environ.get(self._key_env)
         if not val:
-            raise VaultUnlocked(f"missing master key env var: {self._key_env}")
+            raise VaultUnlockedError(f"missing master key env var: {self._key_env}")
         return val
 
     def _read_blob(self) -> dict[str, Any]:
@@ -66,7 +66,7 @@ class LocalEncryptedBackend:
         try:
             plain = f.decrypt(token)
         except InvalidToken as e:
-            raise VaultUnlocked("invalid master key for existing vault") from e
+            raise VaultUnlockedError("invalid master key for existing vault") from e
         return json.loads(plain)
 
     def _write_blob(self, blob: dict[str, Any]) -> None:
@@ -89,7 +89,7 @@ class LocalEncryptedBackend:
             blob = await asyncio.to_thread(self._read_blob)
         entry = blob.get("secrets", {}).get(ref)
         if entry is None:
-            raise SecretNotFound(ref)
+            raise SecretNotFoundError(ref)
         return str(entry["value"])
 
     async def put(self, ref: str, value: str) -> None:
@@ -97,7 +97,7 @@ class LocalEncryptedBackend:
             blob = await asyncio.to_thread(self._read_blob)
             blob.setdefault("secrets", {})[ref] = {
                 "value": value,
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": datetime.now(UTC).isoformat(),
                 "rotated_at": None,
             }
             await asyncio.to_thread(self._write_blob, blob)
@@ -106,7 +106,7 @@ class LocalEncryptedBackend:
         async with self._lock:
             blob = await asyncio.to_thread(self._read_blob)
             entry = blob.get("secrets", {}).get(ref)
-            now_iso = datetime.now(timezone.utc).isoformat()
+            now_iso = datetime.now(UTC).isoformat()
             if entry is None:
                 blob.setdefault("secrets", {})[ref] = {
                     "value": new_value,

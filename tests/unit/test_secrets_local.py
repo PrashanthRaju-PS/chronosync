@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from chronosync.exceptions import SecretNotFound, VaultUnlocked
+from chronosync.exceptions import SecretNotFoundError, VaultUnlockedError
 from chronosync.secrets.local import LocalEncryptedBackend
 
 
@@ -27,7 +27,7 @@ async def test_wrong_key_rejected(tmp_path: Path) -> None:
     v = LocalEncryptedBackend(path=tmp_path / "v.enc", master_key_env="TEST_VAULT_KEY")
     await v.put("x", "y")
     os.environ["TEST_VAULT_KEY"] = "wrong-key"
-    with pytest.raises(VaultUnlocked):
+    with pytest.raises(VaultUnlockedError):
         await v.get("x")
 
 
@@ -36,7 +36,7 @@ async def test_wrong_key_rejected(tmp_path: Path) -> None:
 async def test_missing_key_env(tmp_path: Path) -> None:
     os.environ.pop("MISSING_KEY", None)
     v = LocalEncryptedBackend(path=tmp_path / "v.enc", master_key_env="MISSING_KEY")
-    with pytest.raises(VaultUnlocked):
+    with pytest.raises(VaultUnlockedError):
         await v.put("k", "v")
 
 
@@ -47,7 +47,7 @@ async def test_delete_and_not_found(tmp_path: Path) -> None:
     v = LocalEncryptedBackend(path=tmp_path / "v.enc", master_key_env="TEST_VAULT_KEY")
     await v.put("a", "1")
     await v.delete("a")
-    with pytest.raises(SecretNotFound):
+    with pytest.raises(SecretNotFoundError):
         await v.get("a")
 
 

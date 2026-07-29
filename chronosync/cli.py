@@ -66,7 +66,9 @@ def cmd_seed(exchange: list[str] = typer.Option(None, "--exchange", "-e", help="
     async def _run() -> None:
         await db_engine.ping()
         for ex in targets:
-            seeder = NSEBhavcopySeeder() if ex == "NSE" else BSEBhavcopySeeder() if ex == "BSE" else None
+            seeder = (
+                NSEBhavcopySeeder() if ex == "NSE" else BSEBhavcopySeeder() if ex == "BSE" else None
+            )
             if seeder is None:
                 console.print(f"[yellow]skipping unknown exchange[/]: {ex}")
                 continue
@@ -139,7 +141,9 @@ def cmd_backfill(
 
 @app.command("refresh-meta")
 def cmd_refresh_meta(
-    exchange: list[str] = typer.Option(None, "--exchange", "-e", help="Defaults to configured exchanges"),
+    exchange: list[str] = typer.Option(
+        None, "--exchange", "-e", help="Defaults to configured exchanges"
+    ),
 ) -> None:
     """Refresh instruments.market_cap from the configured provider's ticker meta."""
     _bootstrap()
@@ -156,7 +160,9 @@ def cmd_refresh_meta(
             if not instruments:
                 console.print(f"[yellow]no active instruments for {ex}[/]")
                 continue
-            console.print(f"[cyan]{ex}[/]: refreshing market_cap for {len(instruments)} instruments")
+            console.print(
+                f"[cyan]{ex}[/]: refreshing market_cap for {len(instruments)} instruments"
+            )
             summary = await meta_refresh.run(
                 instruments,
                 feed=feed,
@@ -190,7 +196,9 @@ def cmd_status(as_json: bool = typer.Option(False, "--json")) -> None:
                         {
                             "instrument_id": str(r.instrument_id),
                             "feed": r.feed_name,
-                            "last_synced_ts": r.last_synced_ts.isoformat() if r.last_synced_ts else None,
+                            "last_synced_ts": r.last_synced_ts.isoformat()
+                            if r.last_synced_ts
+                            else None,
                             "last_error": r.last_error,
                             "attempts": r.attempt_count,
                         }

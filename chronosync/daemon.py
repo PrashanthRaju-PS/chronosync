@@ -167,9 +167,7 @@ class Daemon:
     def _expected_latest_session(self, now: datetime | None = None) -> date:
         """`_expected_session_for` across every configured exchange (the most
         recent session any of them should have) — the staleness bar for catch-up."""
-        return max(
-            self._expected_session_for(ex, now) for ex in self._settings.sync.exchanges
-        )
+        return max(self._expected_session_for(ex, now) for ex in self._settings.sync.exchanges)
 
     async def _catch_up_if_stale(self) -> None:
         """Run one immediate sync if a scheduled run was missed while the daemon
@@ -194,12 +192,15 @@ class Daemon:
 
         expected = self._expected_latest_session()
         if last >= expected:
-            _log.info("catch_up_skipped", reason="current",
-                      last_synced=last.isoformat(), expected=expected.isoformat())
+            _log.info(
+                "catch_up_skipped",
+                reason="current",
+                last_synced=last.isoformat(),
+                expected=expected.isoformat(),
+            )
             return
 
-        _log.info("catch_up_triggered",
-                  last_synced=last.isoformat(), expected=expected.isoformat())
+        _log.info("catch_up_triggered", last_synced=last.isoformat(), expected=expected.isoformat())
         await self.run_sync_iteration()
 
     async def run_sync_iteration(self) -> None:
@@ -281,13 +282,21 @@ class Daemon:
     async def run_seed_iteration(self) -> None:
         today = date.today()
         for exchange in self._settings.sync.exchanges:
-            seeder = NSEBhavcopySeeder() if exchange == "NSE" else BSEBhavcopySeeder() if exchange == "BSE" else None
+            seeder = (
+                NSEBhavcopySeeder()
+                if exchange == "NSE"
+                else BSEBhavcopySeeder()
+                if exchange == "BSE"
+                else None
+            )
             if seeder is None:
                 continue
             try:
                 async with db_engine.session_scope() as s:
                     touched = await seeder.run(s)
-                _log.info("seed_iteration_done", exchange=exchange, touched=touched, day=today.isoformat())
+                _log.info(
+                    "seed_iteration_done", exchange=exchange, touched=touched, day=today.isoformat()
+                )
             except Exception as e:  # noqa: BLE001
                 _log.warning("seed_iteration_failed", exchange=exchange, err=str(e))
 

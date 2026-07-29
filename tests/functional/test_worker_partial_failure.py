@@ -22,7 +22,9 @@ from chronosync.sync import planner, worker
 @pytest.mark.functional
 @pytest.mark.requires_docker
 @pytest.mark.asyncio
-async def test_one_failure_does_not_block_others(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_one_failure_does_not_block_others(
+    db_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # Seed five test instruments.
     tickers = ("PF_OK1", "PF_OK2", "PF_BOOM", "PF_OK3", "PF_OK4")
     await repos.upsert_instruments(
@@ -51,7 +53,16 @@ async def test_one_failure_does_not_block_others(db_session, monkeypatch: pytest
         inst_ids[t] = inst.id
 
     good_df = pd.DataFrame(
-        [{"Open": 100.0, "High": 101.0, "Low": 99.0, "Close": 100.5, "Adj Close": 100.5, "Volume": 1000}],
+        [
+            {
+                "Open": 100.0,
+                "High": 101.0,
+                "Low": 99.0,
+                "Close": 100.5,
+                "Adj Close": 100.5,
+                "Volume": 1000,
+            }
+        ],
         index=pd.to_datetime(["2024-01-02"]),
     )
 
@@ -85,7 +96,10 @@ async def test_one_failure_does_not_block_others(db_session, monkeypatch: pytest
     # Re-query bars by UUID (no ORM-object reuse across sessions).
     for t, iid in inst_ids.items():
         bars = await repos.daily_bars_range(
-            db_session, instrument_id=iid, frm=date(2024, 1, 1), to=date(2024, 1, 31)  # type: ignore[arg-type]
+            db_session,
+            instrument_id=iid,
+            frm=date(2024, 1, 1),
+            to=date(2024, 1, 31),  # type: ignore[arg-type]
         )
         if t == "PF_BOOM":
             assert bars == []
@@ -95,16 +109,23 @@ async def test_one_failure_does_not_block_others(db_session, monkeypatch: pytest
 
     # Terminal error recorded for the failed ticker only.
     boom_status = await repos.sync_status_for(
-        db_session, instrument_id=inst_ids["PF_BOOM"], feed_name="yfinance"  # type: ignore[arg-type]
+        db_session,
+        instrument_id=inst_ids["PF_BOOM"],
+        feed_name="yfinance",  # type: ignore[arg-type]
     )
     assert len(boom_status) == 1
     assert boom_status[0].last_error is not None
-    assert "permanent" in boom_status[0].last_error.lower() or "bad symbol" in boom_status[0].last_error.lower()
+    assert (
+        "permanent" in boom_status[0].last_error.lower()
+        or "bad symbol" in boom_status[0].last_error.lower()
+    )
     assert boom_status[0].last_synced_ts is None
 
     # Survivors have clean state.
     ok1_status = await repos.sync_status_for(
-        db_session, instrument_id=inst_ids["PF_OK1"], feed_name="yfinance"  # type: ignore[arg-type]
+        db_session,
+        instrument_id=inst_ids["PF_OK1"],
+        feed_name="yfinance",  # type: ignore[arg-type]
     )
     assert len(ok1_status) == 1
     assert ok1_status[0].last_error is None

@@ -7,7 +7,7 @@ from typing import ClassVar
 
 import keyring
 
-from chronosync.exceptions import SecretNotFound
+from chronosync.exceptions import SecretNotFoundError
 
 _SERVICE = "chronosync"
 
@@ -18,7 +18,7 @@ class KeyringBackend:
     async def get(self, ref: str) -> str:
         val = await asyncio.to_thread(keyring.get_password, _SERVICE, ref)
         if val is None:
-            raise SecretNotFound(ref)
+            raise SecretNotFoundError(ref)
         return val
 
     async def put(self, ref: str, value: str) -> None:
@@ -31,4 +31,4 @@ class KeyringBackend:
         try:
             await asyncio.to_thread(keyring.delete_password, _SERVICE, ref)
         except keyring.errors.PasswordDeleteError as e:
-            raise SecretNotFound(ref) from e
+            raise SecretNotFoundError(ref) from e

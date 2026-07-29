@@ -3,10 +3,10 @@ from __future__ import annotations
 import asyncio
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy.ext.asyncio import async_engine_from_config
 from sqlalchemy.pool import NullPool
 
+from alembic import context
 from chronosync.config import get_settings
 from chronosync.db.models import Base
 

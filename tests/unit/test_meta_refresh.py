@@ -32,7 +32,9 @@ class _FakeFeed:
     supports_intraday = False
     supports_adjusted = True
 
-    def __init__(self, meta_map: dict[str, InstrumentMeta | None], raise_for: set[str] | None = None):
+    def __init__(
+        self, meta_map: dict[str, InstrumentMeta | None], raise_for: set[str] | None = None
+    ):
         self._meta = meta_map
         self._raise = raise_for or set()
         self.calls: list[str] = []
@@ -127,4 +129,6 @@ async def test_provider_errors_counted_not_raised(patched_session) -> None:
 @pytest.mark.asyncio
 async def test_empty_input_returns_empty_summary(patched_session) -> None:
     summary = await meta_refresh.run([], feed=_FakeFeed({}), concurrency=4)
-    assert summary == type(summary)(scanned=0, updated=0, empty=0, errored=0, duration_s=summary.duration_s)
+    assert summary == type(summary)(
+        scanned=0, updated=0, empty=0, errored=0, duration_s=summary.duration_s
+    )

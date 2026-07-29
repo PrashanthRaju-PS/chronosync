@@ -12,7 +12,9 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-os.environ.setdefault("CHRONOSYNC_DB__DSN", "postgresql+asyncpg://chrono:chrono@localhost:5432/chronosync_test")
+os.environ.setdefault(
+    "CHRONOSYNC_DB__DSN", "postgresql+asyncpg://chrono:chrono@localhost:5432/chronosync_test"
+)
 os.environ.setdefault("CHRONOSYNC_VAULT_KEY", "test-vault-key-not-for-prod")
 
 
@@ -82,12 +84,16 @@ def pg_container() -> Iterator[str]:
 
     image = "timescale/timescaledb:latest-pg15"
     try:
-        container = PostgresContainer(image=image, dbname="chronosync_test", username="chrono", password="chrono")
+        container = PostgresContainer(
+            image=image, dbname="chronosync_test", username="chrono", password="chrono"
+        )
         container.start()
     except Exception as e:  # noqa: BLE001
         pytest.skip(f"docker unavailable and no reachable DB: {e}")
     try:
-        dsn = container.get_connection_url().replace("postgresql+psycopg2://", "postgresql+asyncpg://")
+        dsn = container.get_connection_url().replace(
+            "postgresql+psycopg2://", "postgresql+asyncpg://"
+        )
         os.environ["CHRONOSYNC_DB__DSN"] = dsn
         _apply_migrations(dsn)
         yield dsn

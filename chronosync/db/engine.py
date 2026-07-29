@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from chronosync.config import DatabaseSettings
-from chronosync.exceptions import DatabaseUnavailable
+from chronosync.exceptions import DatabaseUnavailableError
 
 _engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
@@ -36,13 +36,13 @@ def init_engine(settings: DatabaseSettings) -> AsyncEngine:
 
 def get_engine() -> AsyncEngine:
     if _engine is None:
-        raise DatabaseUnavailable("engine not initialised; call init_engine() first")
+        raise DatabaseUnavailableError("engine not initialised; call init_engine() first")
     return _engine
 
 
 def get_session_factory() -> async_sessionmaker[AsyncSession]:
     if _session_factory is None:
-        raise DatabaseUnavailable("session factory not initialised; call init_engine() first")
+        raise DatabaseUnavailableError("session factory not initialised; call init_engine() first")
     return _session_factory
 
 
@@ -63,7 +63,7 @@ async def ping() -> None:
         async with get_engine().connect() as conn:
             await conn.execute(text("SELECT 1"))
     except Exception as e:  # noqa: BLE001
-        raise DatabaseUnavailable(str(e)) from e
+        raise DatabaseUnavailableError(str(e)) from e
 
 
 async def dispose() -> None:

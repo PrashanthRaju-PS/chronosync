@@ -425,16 +425,16 @@ serialize via pydantic; paginate by (ts) cursor
 ChronoSyncError
 ├── ConfigurationError
 ├── DatabaseError
-│   ├── DatabaseUnavailable
-│   └── UpsertConflict (should not occur; defensive)
+│   ├── DatabaseUnavailableError
+│   └── UpsertConflictError (should not occur; defensive)
 ├── ProviderError
 │   ├── RetriableProviderError (429, 5xx, network)
 │   └── PermanentProviderError (404 ticker, bad symbol)
 ├── SeederError
 │   └── BhavcopyFetchError
 ├── SecretsError
-│   ├── VaultUnlocked
-│   └── SecretNotFound
+│   ├── VaultUnlockedError
+│   └── SecretNotFoundError
 └── PlannerError
 ```
 

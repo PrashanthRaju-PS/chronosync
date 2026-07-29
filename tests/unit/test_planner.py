@@ -38,7 +38,9 @@ async def test_build_tasks_skips_when_caught_up(monkeypatch: pytest.MonkeyPatch)
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_build_tasks_uses_default_lookback_when_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_build_tasks_uses_default_lookback_when_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     today = date(2024, 1, 10)
     inst = _FakeInstrument("RELIANCE")
 
@@ -68,8 +70,12 @@ async def test_build_tasks_uses_default_lookback_when_empty(monkeypatch: pytest.
 def test_split_backfill_chunks() -> None:
     iid = uuid4()
     tasks = planner.split_backfill(
-        iid, "T", "NSE", "yfinance",
-        date(2024, 1, 1), date(2024, 1, 10),
+        iid,
+        "T",
+        "NSE",
+        "yfinance",
+        date(2024, 1, 1),
+        date(2024, 1, 10),
         batch_days=3,
     )
     assert [(t.from_date, t.to_date) for t in tasks] == [
@@ -83,4 +89,9 @@ def test_split_backfill_chunks() -> None:
 @pytest.mark.unit
 def test_split_backfill_empty_when_inverted() -> None:
     iid = uuid4()
-    assert planner.split_backfill(iid, "T", "NSE", "f", date(2024, 2, 1), date(2024, 1, 1), batch_days=5) == []
+    assert (
+        planner.split_backfill(
+            iid, "T", "NSE", "f", date(2024, 2, 1), date(2024, 1, 1), batch_days=5
+        )
+        == []
+    )

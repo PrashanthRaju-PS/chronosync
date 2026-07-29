@@ -162,7 +162,9 @@ def test_admin_user_add_invokes_repo(runner: CliRunner, monkeypatch: pytest.Monk
 
 
 @pytest.mark.unit
-def test_admin_cred_set_value_from_stdin(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_admin_cred_set_value_from_stdin(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
     aid = uuid4()
     upsert_seen: dict = {}
 

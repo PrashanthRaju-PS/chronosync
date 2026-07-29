@@ -22,12 +22,16 @@ async def test_admin_cred_flow_stores_ref_only(db_session, tmp_path: Path) -> No
     await db_session.commit()
 
     os.environ["CHRONOSYNC_VAULT_KEY"] = "functional-test-key"
-    settings = VaultSettings(backend="local", path=tmp_path / "vault.enc", master_key_env="CHRONOSYNC_VAULT_KEY")
+    settings = VaultSettings(
+        backend="local", path=tmp_path / "vault.enc", master_key_env="CHRONOSYNC_VAULT_KEY"
+    )
     backend = build_backend(settings)
 
     ref = f"kite/{acct.id}/api_key"
     await backend.put(ref, "super-secret-key")
-    await repos.upsert_credential(db_session, account_id=acct.id, key_name="api_key", secret_ref=ref)
+    await repos.upsert_credential(
+        db_session, account_id=acct.id, key_name="api_key", secret_ref=ref
+    )
     await db_session.commit()
 
     cred = await repos.get_credential(db_session, account_id=acct.id, key_name="api_key")

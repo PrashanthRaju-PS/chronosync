@@ -41,12 +41,19 @@ async def test_double_run_is_noop(db_session, monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(yfinance_feed, "_yf_download_sync", lambda *a, **k: df)
     feed = yfinance_feed.YFinanceFeed(concurrency=1, retry_max_attempts=1)
     tasks = planner.split_backfill(
-        inst.id, inst.ticker, inst.exchange, "yfinance",
-        date(2024, 1, 2), date(2024, 1, 2), batch_days=10,
+        inst.id,
+        inst.ticker,
+        inst.exchange,
+        "yfinance",
+        date(2024, 1, 2),
+        date(2024, 1, 2),
+        batch_days=10,
     )
 
     s1 = await worker.run(tasks, feed=feed, concurrency=1)
     s2 = await worker.run(tasks, feed=feed, concurrency=1)
-    bars = await repos.daily_bars_range(db_session, instrument_id=inst.id, frm=date(2024, 1, 1), to=date(2024, 1, 31))
+    bars = await repos.daily_bars_range(
+        db_session, instrument_id=inst.id, frm=date(2024, 1, 1), to=date(2024, 1, 31)
+    )
     assert len(bars) == 1
     assert s1.errored == 0 and s2.errored == 0

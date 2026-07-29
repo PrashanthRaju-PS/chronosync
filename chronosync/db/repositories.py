@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -20,7 +20,6 @@ from chronosync.db.models import (
     User,
     VendorCredential,
 )
-from chronosync.db.types import AssetClass
 
 # ---------- instruments ----------
 
@@ -226,7 +225,7 @@ async def mark_sync_started(
     instrument_id: UUID,
     feed_name: str,
 ) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     stmt = pg_insert(SyncState).values(
         instrument_id=instrument_id,
         feed_name=feed_name,
@@ -250,7 +249,7 @@ async def mark_sync_success(
     feed_name: str,
     last_ts: date,
 ) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     stmt = pg_insert(SyncState).values(
         instrument_id=instrument_id,
         feed_name=feed_name,
@@ -281,7 +280,7 @@ async def mark_sync_finished(
     last_error, without touching last_synced_ts. Without this, the empty-result
     path leaves last_run_started_at ahead of last_run_finished_at forever, so the
     row reads as perpetually 'in progress'. The row must already exist (started)."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     stmt = (
         update(SyncState)
         .where(
@@ -300,7 +299,7 @@ async def mark_sync_error(
     feed_name: str,
     error: str,
 ) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     stmt = pg_insert(SyncState).values(
         instrument_id=instrument_id,
         feed_name=feed_name,
@@ -408,7 +407,7 @@ async def upsert_credential(
     secret_ref: str,
     rotated: bool = False,
 ) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     values: dict[str, Any] = {
         "account_id": account_id,
         "key_name": key_name,

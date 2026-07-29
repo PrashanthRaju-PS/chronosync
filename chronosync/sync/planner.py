@@ -43,7 +43,11 @@ async def build_tasks(
     tasks: list[FetchTask] = []
     for inst in instruments:
         last_ts = last_synced.get(inst.id)
-        frm = last_ts + timedelta(days=1) if last_ts else today - timedelta(days=default_lookback_days)
+        frm = (
+            last_ts + timedelta(days=1)
+            if last_ts
+            else today - timedelta(days=default_lookback_days)
+        )
         if frm > today:
             continue
         if not trading_days(exchange, frm, today):

@@ -74,9 +74,7 @@ async def test_refresh_persists_mcap_and_preserves_existing_on_empty(db_session)
 
     # Scope to just the three instruments this test inserted (the DB may have
     # leftover state from other functional tests sharing this container).
-    insts = [
-        await repos.get_instrument(db_session, t) for t in ("MCAPA", "MCAPB", "MCAPMISS")
-    ]
+    insts = [await repos.get_instrument(db_session, t) for t in ("MCAPA", "MCAPB", "MCAPMISS")]
     insts = [i for i in insts if i is not None]
     assert len(insts) == 3
 
@@ -98,7 +96,11 @@ async def test_refresh_persists_mcap_and_preserves_existing_on_empty(db_session)
     a = await repos.get_instrument(db_session, "MCAPA")
     b = await repos.get_instrument(db_session, "MCAPB")
     miss_after = await repos.get_instrument(db_session, "MCAPMISS")
-    assert a is not None and a.market_cap == Decimal("1500000.00") and a.market_cap_as_of == date(2026, 5, 31)
+    assert (
+        a is not None
+        and a.market_cap == Decimal("1500000.00")
+        and a.market_cap_as_of == date(2026, 5, 31)
+    )
     assert b is not None and b.market_cap == Decimal("2500000.00")
     # Pre-existing value preserved despite empty provider response.
     assert miss_after is not None and miss_after.market_cap == Decimal("9999999.00")

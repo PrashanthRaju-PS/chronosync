@@ -48,9 +48,24 @@ def test_daemon_registers_three_cron_jobs(monkeypatch: pytest.MonkeyPatch) -> No
     # Replicate the start() bits that wire jobs, skipping DB/provider init.
     from apscheduler.triggers.cron import CronTrigger
 
-    mock_scheduler.add_job(d.run_sync_iteration, CronTrigger.from_crontab(d._settings.sync.eod_cron), id="sync_iteration", replace_existing=True)
-    mock_scheduler.add_job(d.run_seed_iteration, CronTrigger.from_crontab(d._settings.sync.seed_cron), id="seed_iteration", replace_existing=True)
-    mock_scheduler.add_job(d.run_meta_iteration, CronTrigger.from_crontab(d._settings.sync.meta_cron), id="meta_iteration", replace_existing=True)
+    mock_scheduler.add_job(
+        d.run_sync_iteration,
+        CronTrigger.from_crontab(d._settings.sync.eod_cron),
+        id="sync_iteration",
+        replace_existing=True,
+    )
+    mock_scheduler.add_job(
+        d.run_seed_iteration,
+        CronTrigger.from_crontab(d._settings.sync.seed_cron),
+        id="seed_iteration",
+        replace_existing=True,
+    )
+    mock_scheduler.add_job(
+        d.run_meta_iteration,
+        CronTrigger.from_crontab(d._settings.sync.meta_cron),
+        id="meta_iteration",
+        replace_existing=True,
+    )
 
     assert mock_scheduler.add_job.call_count == 3
     job_ids = {call.kwargs["id"] for call in mock_scheduler.add_job.call_args_list}
@@ -149,19 +164,24 @@ class TestExpectedLatestSession:
     def test_after_eod_on_trading_day_expects_today(self):
         if not calendars.is_trading_day("NSE", self.MON):
             pytest.skip("2026-07-13 is not an NSE trading day")
-        now = datetime(2026, 7, 13, 20, 57, tzinfo=_TZ)   # the real bug scenario
+        now = datetime(2026, 7, 13, 20, 57, tzinfo=_TZ)  # the real bug scenario
         assert _daemon()._expected_latest_session(now) == self.MON
 
     def test_before_eod_on_trading_day_expects_prior_session(self):
         if not calendars.is_trading_day("NSE", self.MON):
             pytest.skip("2026-07-13 is not an NSE trading day")
         now = datetime(2026, 7, 13, 9, 0, tzinfo=_TZ)
-        assert _daemon()._expected_latest_session(now) == calendars.prev_trading_day("NSE", self.MON)
+        assert _daemon()._expected_latest_session(now) == calendars.prev_trading_day(
+            "NSE", self.MON
+        )
 
     def test_weekend_resolves_to_prior_session(self):
-        now = datetime(2026, 7, 11, 20, 0, tzinfo=_TZ)     # Saturday evening
-        expected = self.SAT if calendars.is_trading_day("NSE", self.SAT) \
+        now = datetime(2026, 7, 11, 20, 0, tzinfo=_TZ)  # Saturday evening
+        expected = (
+            self.SAT
+            if calendars.is_trading_day("NSE", self.SAT)
             else calendars.prev_trading_day("NSE", self.SAT)
+        )
         assert _daemon()._expected_latest_session(now) == expected
 
     def test_unparseable_cron_falls_back_to_strictly_before(self):
@@ -197,7 +217,7 @@ class TestPartialBarGuard:
     def test_after_eod_ceiling_includes_today(self):
         if not calendars.is_trading_day("NSE", self.MON):
             pytest.skip("2026-07-13 is not an NSE trading day")
-        now = datetime(2026, 7, 13, 18, 31, tzinfo=_TZ)   # just past EOD
+        now = datetime(2026, 7, 13, 18, 31, tzinfo=_TZ)  # just past EOD
         assert _daemon()._expected_session_for("NSE", now) == self.MON
 
 
@@ -214,14 +234,19 @@ class TestPeriodicCatchUp:
         # Replicate just the periodic-catch-up wiring from start().
         from apscheduler.triggers.interval import IntervalTrigger
 
-        mock.add_job(d._catch_up_if_stale,
-                     IntervalTrigger(minutes=d._settings.sync.catch_up_interval_minutes),
-                     id="catch_up_periodic", replace_existing=True,
-                     coalesce=True, max_instances=1, misfire_grace_time=300)
+        mock.add_job(
+            d._catch_up_if_stale,
+            IntervalTrigger(minutes=d._settings.sync.catch_up_interval_minutes),
+            id="catch_up_periodic",
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=300,
+        )
         ids = {c.kwargs["id"] for c in mock.add_job.call_args_list}
         assert "catch_up_periodic" in ids
 
     def test_zero_interval_disables(self):
         d = _daemon()
         d._settings.sync.catch_up_interval_minutes = 0
-        assert d._settings.sync.catch_up_interval_minutes == 0   # guard is `> 0` in start()
+        assert d._settings.sync.catch_up_interval_minutes == 0  # guard is `> 0` in start()

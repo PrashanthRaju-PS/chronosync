@@ -64,7 +64,9 @@ async def _handle_one(task: FetchTask, feed: BaseDataFeed, summary: IterationSum
                 "adj_factor": b.adj_factor,
                 "open_interest": b.open_interest,
             }
-            async for b in feed.fetch_daily_bars(task.ticker, task.exchange, task.from_date, task.to_date)
+            async for b in feed.fetch_daily_bars(
+                task.ticker, task.exchange, task.from_date, task.to_date
+            )
         ]
     except PermanentProviderError as e:
         _log.warning(

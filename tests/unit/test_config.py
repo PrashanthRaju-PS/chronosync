@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from chronosync.config import Settings, get_settings
 
@@ -43,5 +44,5 @@ def test_missing_dsn_errors(monkeypatch: pytest.MonkeyPatch) -> None:
         if k.startswith("CHRONOSYNC_DB__"):
             monkeypatch.delenv(k, raising=False)
     get_settings.cache_clear()
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         Settings(_env_file=None)  # type: ignore[call-arg]
