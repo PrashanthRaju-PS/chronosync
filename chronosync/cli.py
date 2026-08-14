@@ -19,7 +19,7 @@ from chronosync.logging import configure_logging
 from chronosync.providers import registry as provider_registry
 from chronosync.secrets import build_backend
 from chronosync.seeders import BSEBhavcopySeeder, NSEBhavcopySeeder
-from chronosync.sync import meta_refresh, planner, worker
+from chronosync.sync import fno_refresh, meta_refresh, planner, worker
 
 app = typer.Typer(no_args_is_help=True, add_completion=False, help="ChronoSync CLI")
 admin_app = typer.Typer(no_args_is_help=True, help="Mutate users / accounts / credentials")
@@ -144,6 +144,9 @@ def cmd_refresh_meta(
     exchange: list[str] = typer.Option(
         None, "--exchange", "-e", help="Defaults to configured exchanges"
     ),
+    only_missing: bool = typer.Option(
+        False, "--only-missing", help="Only fetch instruments that have no market_cap yet"
+    ),
 ) -> None:
     """Refresh instruments.market_cap from the configured provider's ticker meta."""
     _bootstrap()
@@ -157,6 +160,8 @@ def cmd_refresh_meta(
         for ex in targets:
             async with db_engine.session_scope() as s:
                 instruments = await repos.list_active_instruments(s, exchange=ex)
+            if only_missing:
+                instruments = [i for i in instruments if i.market_cap is None]
             if not instruments:
                 console.print(f"[yellow]no active instruments for {ex}[/]")
                 continue
@@ -166,13 +171,34 @@ def cmd_refresh_meta(
             summary = await meta_refresh.run(
                 instruments,
                 feed=feed,
-                concurrency=settings.providers.yfinance_concurrency,
+                concurrency=settings.providers.meta_concurrency,
             )
             console.print(
                 f"[green]{ex} done[/]  scanned={summary.scanned} updated={summary.updated} "
                 f"empty={summary.empty} errored={summary.errored} duration_s={summary.duration_s}"
             )
         await provider_registry.get_registry().close_all()
+        await db_engine.dispose()
+
+    _async(_run())
+
+
+@app.command("refresh-fno")
+def cmd_refresh_fno() -> None:
+    """Refresh instruments.is_fno from NSE's F&O underlying list (one-shot)."""
+    _bootstrap()
+
+    async def _run() -> None:
+        await db_engine.ping()
+        summary = await fno_refresh.run(exchange="NSE")
+        if summary.fetched == 0:
+            console.print("[yellow]NSE F&O fetch failed — flags left unchanged[/]")
+        else:
+            console.print(
+                f"[green]NSE F&O done[/]  fetched={summary.fetched} "
+                f"marked={summary.marked} cleared={summary.cleared} "
+                f"duration_s={summary.duration_s}"
+            )
         await db_engine.dispose()
 
     _async(_run())

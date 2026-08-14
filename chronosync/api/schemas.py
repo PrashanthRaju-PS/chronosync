@@ -23,6 +23,8 @@ class InstrumentDTO(BaseModel):
     isin: str | None = None
     market_cap: Decimal | None = None
     market_cap_as_of: date | None = None
+    is_fno: bool = False
+    fno_as_of: date | None = None
     is_active: bool
 
 

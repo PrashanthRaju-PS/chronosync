@@ -18,7 +18,7 @@ from chronosync.db import repositories as repos
 from chronosync.logging import configure_logging, get_logger
 from chronosync.providers import registry as provider_registry
 from chronosync.seeders import BSEBhavcopySeeder, NSEBhavcopySeeder
-from chronosync.sync import meta_refresh, planner, worker
+from chronosync.sync import fno_refresh, meta_refresh, planner, worker
 
 _log = get_logger(__name__)
 
@@ -76,12 +76,35 @@ class Daemon:
             coalesce=True,
             misfire_grace_time=6 * 3600,
         )
+        self._scheduler.add_job(
+            self.run_fno_iteration,
+            CronTrigger.from_crontab(self._settings.sync.fno_cron),
+            id="fno_iteration",
+            replace_existing=True,
+            coalesce=True,
+            misfire_grace_time=6 * 3600,
+        )
         # Self-heal a sync missed while the daemon was down: a no-trigger job
         # runs once, immediately, after the scheduler starts.
         if self._settings.sync.catch_up_on_start:
             self._scheduler.add_job(
                 self._catch_up_if_stale,
                 id="catch_up_on_start",
+                replace_existing=True,
+            )
+            # Same idea for the monthly F&O refresh: a cron fire on the 1st is
+            # never replayed if the machine slept through it, so reconcile against
+            # fno_as_of at start (cheap, idempotent, runs at most once a month).
+            self._scheduler.add_job(
+                self._refresh_fno_if_stale,
+                id="fno_catch_up_on_start",
+                replace_existing=True,
+            )
+            # ...and the weekly market_cap refresh: heal it if market_cap_as_of has
+            # drifted past meta_stale_days (missed Saturday, or a fresh container).
+            self._scheduler.add_job(
+                self._refresh_meta_if_stale,
+                id="meta_catch_up_on_start",
                 replace_existing=True,
             )
         # ...and keep re-checking. A cron fire that elapses while the process or
@@ -99,12 +122,33 @@ class Daemon:
                 max_instances=1,
                 misfire_grace_time=300,
             )
+            # ...and re-check the monthly F&O refresh on the same cadence, so a
+            # machine that was asleep on the 1st heals shortly after it wakes.
+            self._scheduler.add_job(
+                self._refresh_fno_if_stale,
+                IntervalTrigger(minutes=self._settings.sync.catch_up_interval_minutes),
+                id="fno_catch_up_periodic",
+                replace_existing=True,
+                coalesce=True,
+                max_instances=1,
+                misfire_grace_time=300,
+            )
+            self._scheduler.add_job(
+                self._refresh_meta_if_stale,
+                IntervalTrigger(minutes=self._settings.sync.catch_up_interval_minutes),
+                id="meta_catch_up_periodic",
+                replace_existing=True,
+                coalesce=True,
+                max_instances=1,
+                misfire_grace_time=300,
+            )
         self._scheduler.start()
         _log.info(
             "daemon_started",
             eod_cron=self._settings.sync.eod_cron,
             seed_cron=self._settings.sync.seed_cron,
             meta_cron=self._settings.sync.meta_cron,
+            fno_cron=self._settings.sync.fno_cron,
             tz=self._settings.sync.timezone,
             exchanges=self._settings.sync.exchanges,
         )
@@ -266,7 +310,7 @@ class Daemon:
             summary = await meta_refresh.run(
                 instruments,
                 feed=feed,
-                concurrency=self._settings.providers.yfinance_concurrency,
+                concurrency=self._settings.providers.meta_concurrency,
             )
             _log.info(
                 "meta_iteration_done",
@@ -278,6 +322,67 @@ class Daemon:
                 errored=summary.errored,
                 duration_s=summary.duration_s,
             )
+
+    async def _refresh_meta_if_stale(self, now: datetime | None = None) -> None:
+        """Run the weekly market_cap refresh if `market_cap_as_of` has drifted
+        past meta_stale_days (missed Saturday cron, or a freshly-built container).
+
+        Gated by staleness so a full-universe yfinance sweep runs at most about
+        once a week, never on every boot. Skipped on a cold DB (nothing seeded
+        yet) so first fill is left to the normal cron.
+        """
+        tz = ZoneInfo(self._settings.sync.timezone)
+        ref = (now or datetime.now(tz)).astimezone(tz).date()
+        async with db_engine.session_scope() as s:
+            wm = await repos.market_cap_watermark(s)
+        if wm is None:
+            _log.info("meta_refresh_skipped", reason="cold_db")
+            return
+        age = (ref - wm).days
+        if age < self._settings.sync.meta_stale_days:
+            _log.info("meta_refresh_skipped", reason="current", market_cap_as_of=wm.isoformat())
+            return
+        _log.info("meta_refresh_triggered", market_cap_as_of=wm.isoformat(), age_days=age)
+        await self.run_meta_iteration()
+
+    async def run_fno_iteration(self) -> None:
+        """Refresh instruments.is_fno from the exchange's F&O underlying list.
+        NSE-only for now (the only exchange with a wired derivatives source)."""
+        if "NSE" not in self._settings.sync.exchanges:
+            return
+        summary = await fno_refresh.run(exchange="NSE")
+        _log.info(
+            "fno_iteration_done",
+            exchange=summary.exchange,
+            fetched=summary.fetched,
+            marked=summary.marked,
+            cleared=summary.cleared,
+            duration_s=summary.duration_s,
+        )
+
+    async def _refresh_fno_if_stale(self, now: datetime | None = None) -> None:
+        """Run the monthly F&O refresh if it hasn't run yet this calendar month.
+
+        Covers a scheduled fire missed while the process — or the whole VM — was
+        suspended, mirroring `_catch_up_if_stale` for sync. A single MAX query
+        when already current, and at most one refresh per month.
+        """
+        if "NSE" not in self._settings.sync.exchanges:
+            return
+        tz = ZoneInfo(self._settings.sync.timezone)
+        ref = (now or datetime.now(tz)).astimezone(tz).date()
+        async with db_engine.session_scope() as s:
+            wm = await repos.fno_watermark(s, exchange="NSE")
+        # wm in the current (or a later) month means this month's refresh is done.
+        if wm is not None and (wm.year, wm.month) >= (ref.year, ref.month):
+            _log.info("fno_refresh_skipped", reason="current", fno_as_of=wm.isoformat())
+            return
+        _log.info(
+            "fno_refresh_triggered",
+            fno_as_of=wm.isoformat() if wm else None,
+            ref=ref.isoformat(),
+        )
+        await self.run_fno_iteration()
 
     async def run_seed_iteration(self) -> None:
         today = date.today()
