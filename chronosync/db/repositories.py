@@ -123,8 +123,10 @@ async def update_instrument_market_cap(
     as_of: date,
 ) -> int:
     """Refresh market_cap snapshot. No-op (returns 0) when value is None so
-    transient provider misses never clobber an existing good value."""
-    if market_cap is None:
+    transient provider misses never clobber an existing good value. A non-finite
+    Decimal (NaN/inf) is treated as a miss too — it has no JSON encoding and
+    would 500 the /instruments serializer if it ever reached the row."""
+    if market_cap is None or not market_cap.is_finite():
         return 0
     stmt = (
         update(Instrument)

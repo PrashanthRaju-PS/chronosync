@@ -7,6 +7,7 @@ Exchange suffix mapping: NSE → '.NS', BSE → '.BO'.
 from __future__ import annotations
 
 import asyncio
+import math
 import random
 import time
 from collections.abc import AsyncIterator
@@ -164,8 +165,8 @@ def _yf_market_cap_sync(symbol: str, *, attempts: int = 5) -> float | None:
     for i in range(attempts):
         try:
             mc = getattr(yf.Ticker(symbol).fast_info, "market_cap", None)
-            if mc:
-                return float(mc)
+            if (val := _finite(mc)) is not None:
+                return val
         except Exception as e:  # noqa: BLE001
             if _is_rate_limited(str(e)) and i < attempts - 1:
                 time.sleep(_backoff(i))
@@ -179,9 +180,20 @@ def _yf_market_cap_sync(symbol: str, *, attempts: int = 5) -> float | None:
                 continue
             _log.warning("yfinance_info_failed", symbol=symbol, err=str(e))
             return None
-        mc = info.get("marketCap")
-        return float(mc) if mc else None
+        return _finite(info.get("marketCap"))
     return None
+
+
+def _finite(mc: Any) -> float | None:
+    """Coerce a yfinance market_cap to a positive finite float, else None.
+
+    Yahoo can return None, 0, or NaN/inf; only a real positive number is a
+    market cap. NaN in particular is truthy and would otherwise survive into a
+    Decimal('NaN') that has no JSON encoding and 500s the API serializer."""
+    if not mc:
+        return None
+    val = float(mc)
+    return val if math.isfinite(val) and val > 0 else None
 
 
 def _backoff(attempt: int) -> float:

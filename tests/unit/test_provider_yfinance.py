@@ -157,6 +157,29 @@ async def test_rate_limit_raises_retriable(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    ("mc", "expected"),
+    [
+        (None, None),
+        (0, None),
+        (0.0, None),
+        (float("nan"), None),        # Yahoo's throttled/missing snapshot
+        (float("inf"), None),
+        (-1_000_000, None),          # a negative "market cap" is not real
+        (1_500_000, 1_500_000.0),
+        ("2500000", 2_500_000.0),    # yfinance sometimes stringifies
+    ],
+)
+def test_finite_market_cap_coercion(mc, expected) -> None:
+    """Only a real positive finite number is a market cap; NaN/inf/0/neg -> None.
+
+    Regression: a NaN survived into Decimal('NaN'), which has no JSON encoding and
+    500s the entire /instruments response for every consumer.
+    """
+    assert yfinance_feed._finite(mc) == expected
+
+
+@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_unknown_exchange_permanent() -> None:
     feed = yfinance_feed.YFinanceFeed(concurrency=1)
