@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import math
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Generic, TypeVar
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 T = TypeVar("T")
 
@@ -23,7 +24,23 @@ class InstrumentDTO(BaseModel):
     isin: str | None = None
     market_cap: Decimal | None = None
     market_cap_as_of: date | None = None
+    is_fno: bool = False
+    fno_as_of: date | None = None
     is_active: bool
+
+    @field_validator("market_cap", mode="before")
+    @classmethod
+    def _drop_non_finite_market_cap(cls, v: object) -> object:
+        # A NaN/inf market cap (a bad provider snapshot) is a valid Decimal/NUMERIC
+        # but pydantic's Decimal type rejects non-finite values — so a single bad
+        # row would raise on model_validate and 500 the entire /instruments list.
+        # Runs `before` core validation and coerces it to null, so one bad row
+        # degrades to a missing field rather than an outage.
+        if isinstance(v, Decimal) and not v.is_finite():
+            return None
+        if isinstance(v, float) and not math.isfinite(v):
+            return None
+        return v
 
 
 class DailyBarDTO(BaseModel):

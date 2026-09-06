@@ -16,6 +16,7 @@ router = APIRouter(prefix="/instruments", tags=["instruments"])
 async def list_instruments(
     exchange: str | None = None,
     active: bool | None = None,
+    fno: bool | None = None,
     q: str | None = None,
     cursor: str | None = None,
     limit: int = Query(100, ge=1, le=500),
@@ -26,6 +27,7 @@ async def list_instruments(
         session,
         exchange=exchange,
         active=active,
+        fno=fno,
         q=q,
         after_ticker=after,
         limit=limit + 1,

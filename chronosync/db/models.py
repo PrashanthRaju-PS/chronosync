@@ -57,6 +57,12 @@ class Instrument(Base):
     isin: Mapped[str | None] = mapped_column(String, nullable=True)
     market_cap: Mapped[Decimal | None] = mapped_column(Numeric(20, 2), nullable=True)
     market_cap_as_of: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # F&O (derivatives) membership: whether this underlying has listed futures/options.
+    # Populated monthly from the exchange's derivatives underlying list, not the price
+    # feed — see chronosync/sync/fno_refresh.py. fno_as_of stamps the last refresh so a
+    # missed run can be detected (mirrors market_cap_as_of).
+    is_fno: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    fno_as_of: Mapped[date | None] = mapped_column(Date, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()")

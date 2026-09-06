@@ -31,6 +31,10 @@ class VaultSettings(BaseModel):
 class ProviderSettings(BaseModel):
     default_feed: str = "yfinance"
     yfinance_concurrency: int = 8
+    # market_cap refresh hits Yahoo's quote endpoints, which rate-limit harder than
+    # bar downloads — keep this low so a whole-universe sweep doesn't get throttled
+    # to empty. The provider also backoff-retries on 429.
+    meta_concurrency: int = 3
     retry_max_attempts: int = 5
     retry_base_delay_s: float = 1.0
     retry_max_delay_s: float = 30.0
@@ -44,6 +48,10 @@ class SyncSettings(BaseModel):
     eod_cron: str = "30 18 * * mon-fri"
     seed_cron: str = "0 9 * * mon-fri"
     meta_cron: str = "0 6 * * SAT"  # weekly market_cap refresh
+    # Heal a missed weekly meta refresh: if the newest market_cap_as_of is older
+    # than this many days, the catch-up guard fires one refresh (startup + interval).
+    meta_stale_days: int = 8
+    fno_cron: str = "0 7 1 * *"  # monthly F&O membership refresh (07:00 on the 1st)
     timezone: str = "Asia/Kolkata"
     backfill_batch_days: int = 30
     # On daemon start, run one immediate sync if data is behind the most recent

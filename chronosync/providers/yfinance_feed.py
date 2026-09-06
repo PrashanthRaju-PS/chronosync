@@ -7,6 +7,9 @@ Exchange suffix mapping: NSE → '.NS', BSE → '.BO'.
 from __future__ import annotations
 
 import asyncio
+import math
+import random
+import time
 from collections.abc import AsyncIterator
 from datetime import date, timedelta
 from decimal import Decimal
@@ -88,22 +91,28 @@ class YFinanceFeed:
         raise RetriableProviderError(f"exhausted retries for {symbol}")  # pragma: no cover
 
     async def fetch_instrument_meta(self, ticker: str, exchange: str) -> InstrumentMeta | None:
+        """Market-cap snapshot for one instrument.
+
+        Sources market_cap from yfinance `fast_info` (the lightweight v8 quote
+        path), falling back to the heavier `.info` quoteSummary only if that
+        misses. `.info` gets throttled to an empty dict at whole-universe scale
+        — which is why the weekly refresh silently populated nothing — whereas
+        fast_info holds up. The meta-refresh consumer persists only market_cap,
+        so the other InstrumentMeta fields keep their equity defaults.
+        """
         symbol = _yf_symbol(ticker, exchange)
         async with self._sem:
-            info = await asyncio.to_thread(_yf_info_sync, symbol)
-        if not info:
+            mc = await asyncio.to_thread(_yf_market_cap_sync, symbol)
+        if mc is None:
             return None
-        currency = (info.get("currency") or "INR").upper()[:3]
-        country = (info.get("country") or "IN")[:2].upper()
-        mc = info.get("marketCap")
         return InstrumentMeta(
             ticker=ticker,
             exchange=exchange,
             asset_class=AssetClass.EQUITY,
-            country_code=country,
-            currency=currency,
-            isin=info.get("isin"),
-            market_cap=Decimal(str(mc)) if mc else None,
+            country_code="IN",
+            currency="INR",
+            isin=None,
+            market_cap=Decimal(str(mc)).quantize(Decimal("0.01")),
             is_active=True,
         )
 
@@ -134,6 +143,61 @@ def _yf_download_sync(symbol: str, frm: date, to: date) -> Any:
     if hasattr(df.columns, "get_level_values"):
         df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
     return df
+
+
+_RATE_LIMIT_HINTS = ("too many requests", "rate limit", "429")
+
+
+def _is_rate_limited(msg: str) -> bool:
+    m = msg.lower()
+    return any(h in m for h in _RATE_LIMIT_HINTS)
+
+
+def _yf_market_cap_sync(symbol: str, *, attempts: int = 5) -> float | None:
+    """market_cap via fast_info first, then .info, with backoff-retry on Yahoo
+    rate-limiting.
+
+    At whole-universe scale Yahoo starts returning "Too Many Requests"; fast_info
+    swallows that into a None, so a throttled real stock is indistinguishable from
+    a genuine no-market-cap ETF *unless* we probe .info, which raises the 429. On
+    a rate-limit signal we back off and retry; a clean miss (no rate-limit) returns
+    None immediately (ETFs / fund units legitimately have no market cap)."""
+    for i in range(attempts):
+        try:
+            mc = getattr(yf.Ticker(symbol).fast_info, "market_cap", None)
+            if (val := _finite(mc)) is not None:
+                return val
+        except Exception as e:  # noqa: BLE001
+            if _is_rate_limited(str(e)) and i < attempts - 1:
+                time.sleep(_backoff(i))
+                continue
+        # fast_info missed — confirm via .info, which surfaces the 429 explicitly.
+        try:
+            info = dict(yf.Ticker(symbol).info or {})
+        except Exception as e:  # noqa: BLE001
+            if _is_rate_limited(str(e)) and i < attempts - 1:
+                time.sleep(_backoff(i))
+                continue
+            _log.warning("yfinance_info_failed", symbol=symbol, err=str(e))
+            return None
+        return _finite(info.get("marketCap"))
+    return None
+
+
+def _finite(mc: Any) -> float | None:
+    """Coerce a yfinance market_cap to a positive finite float, else None.
+
+    Yahoo can return None, 0, or NaN/inf; only a real positive number is a
+    market cap. NaN in particular is truthy and would otherwise survive into a
+    Decimal('NaN') that has no JSON encoding and 500s the API serializer."""
+    if not mc:
+        return None
+    val = float(mc)
+    return val if math.isfinite(val) and val > 0 else None
+
+
+def _backoff(attempt: int) -> float:
+    return min(2.0**attempt, 30.0) + random.uniform(0.0, 1.0)
 
 
 def _yf_info_sync(symbol: str) -> dict[str, Any]:

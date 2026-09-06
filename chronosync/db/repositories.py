@@ -52,6 +52,7 @@ async def find_instruments(
     *,
     exchange: str | None = None,
     active: bool | None = None,
+    fno: bool | None = None,
     q: str | None = None,
     after_ticker: str | None = None,
     limit: int = 100,
@@ -62,6 +63,8 @@ async def find_instruments(
         conds.append(Instrument.exchange == exchange)
     if active is not None:
         conds.append(Instrument.is_active.is_(active))
+    if fno is not None:
+        conds.append(Instrument.is_fno.is_(fno))
     if q:
         conds.append(Instrument.ticker.ilike(f"{q}%"))
     if after_ticker:
@@ -120,8 +123,10 @@ async def update_instrument_market_cap(
     as_of: date,
 ) -> int:
     """Refresh market_cap snapshot. No-op (returns 0) when value is None so
-    transient provider misses never clobber an existing good value."""
-    if market_cap is None:
+    transient provider misses never clobber an existing good value. A non-finite
+    Decimal (NaN/inf) is treated as a miss too — it has no JSON encoding and
+    would 500 the /instruments serializer if it ever reached the row."""
+    if market_cap is None or not market_cap.is_finite():
         return 0
     stmt = (
         update(Instrument)
@@ -130,6 +135,62 @@ async def update_instrument_market_cap(
     )
     res = await session.execute(stmt)
     return res.rowcount or 0
+
+
+async def set_fno_flags(
+    session: AsyncSession,
+    *,
+    exchange: str,
+    fno_tickers: Sequence[str],
+    as_of: date,
+) -> tuple[int, int]:
+    """Reconcile the F&O membership flag for one exchange against `fno_tickers`.
+
+    Marks every listed ticker `is_fno=True` and everything else on the exchange
+    `is_fno=False`, stamping `fno_as_of=as_of` on the whole exchange so the last
+    refresh is always datable (even the rows that stayed False). Returns
+    ``(marked_true, cleared_false)``.
+
+    A membership set that comes back empty is treated as a provider miss and
+    skipped — the exchange list is never legitimately empty, so clearing every
+    flag on an empty fetch would silently wipe the universe.
+    """
+    wanted = {t.strip().upper() for t in fno_tickers if t and t.strip()}
+    if not wanted:
+        return (0, 0)
+    on = (
+        update(Instrument)
+        .where(Instrument.exchange == exchange, func.upper(Instrument.ticker).in_(wanted))
+        .values(is_fno=True, fno_as_of=as_of, updated_at=func.now())
+    )
+    off = (
+        update(Instrument)
+        .where(Instrument.exchange == exchange, func.upper(Instrument.ticker).notin_(wanted))
+        .values(is_fno=False, fno_as_of=as_of, updated_at=func.now())
+    )
+    marked = (await session.execute(on)).rowcount or 0
+    cleared = (await session.execute(off)).rowcount or 0
+    return (marked, cleared)
+
+
+async def fno_watermark(session: AsyncSession, *, exchange: str | None = None) -> date | None:
+    """Newest `fno_as_of` across instruments — the last time the F&O flag was
+    refreshed. None when it has never run. Drives the monthly staleness guard."""
+    stmt = select(func.max(Instrument.fno_as_of))
+    if exchange:
+        stmt = stmt.where(Instrument.exchange == exchange)
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def market_cap_watermark(
+    session: AsyncSession, *, exchange: str | None = None
+) -> date | None:
+    """Newest `market_cap_as_of` — the last time any market cap was refreshed.
+    Drives the meta staleness catch-up (heals a missed weekly refresh)."""
+    stmt = select(func.max(Instrument.market_cap_as_of))
+    if exchange:
+        stmt = stmt.where(Instrument.exchange == exchange)
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
 # ---------- daily bars ----------
